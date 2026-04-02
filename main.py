@@ -6,7 +6,6 @@ import random
 import threading
 import time
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import requests
 from flask import Flask, request
@@ -29,7 +28,7 @@ WEBHOOK_URL = "https://tele-bot-2-production.up.railway.app"   # CHANGE THIS
 PORT = int(os.environ.get("PORT", 8443))
 
 print("=" * 60)
-print("🤖 KAILASH FOREX SIGNAL BOT - REAL TECHNICAL ANALYSIS")
+print("🤖 KAILASH FOREX SIGNAL BOT - NO PANDAS VERSION")
 print(f"Admin: {CONTACT_USERNAME}")
 print(f"Public: {PUBLIC_CHANNEL_LINK}")
 print(f"VIP: {VIP_CHANNEL_LINK}")
@@ -81,7 +80,7 @@ FALLBACK = {
 }
 
 # ------------------------------------------------------------
-# REAL TECHNICAL ANALYSIS (Multi-timeframe, RSI, SMA, MACD)
+# REAL TECHNICAL ANALYSIS (No pandas, pure numpy)
 # ------------------------------------------------------------
 def get_live_price(ticker):
     try:
@@ -92,75 +91,98 @@ def get_live_price(ticker):
         pass
     return FALLBACK.get(ticker, 1000.0)
 
-def get_technical_indicators(ticker):
-    """Fetch daily data and compute SMA20, SMA50, RSI, MACD, trend strength"""
+def get_historical_data(ticker, period="60d"):
+    """Return numpy array of close prices and dates"""
     try:
-        df = yf.download(ticker, period="60d", interval="1d", progress=False, timeout=8)
-        if df.empty:
-            return None
-        df['SMA20'] = df['Close'].rolling(20).mean()
-        df['SMA50'] = df['Close'].rolling(50).mean()
-        # RSI
-        delta = df['Close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        # MACD
-        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp1 - exp2
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = df['MACD'] - df['Signal']
-        return df
-    except Exception as e:
-        print(f"Indicator error {ticker}: {e}")
+        data = yf.download(ticker, period=period, interval="1d", progress=False, timeout=8)
+        if data.empty:
+            return None, None
+        closes = data['Close'].values
+        return closes, data.index
+    except:
+        return None, None
+
+def calculate_sma(prices, period):
+    if len(prices) < period:
         return None
+    return np.mean(prices[-period:])
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period+1:
+        return 50
+    deltas = np.diff(prices)
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    avg_gain = np.mean(gains[-period:])
+    avg_loss = np.mean(losses[-period:])
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_macd(prices):
+    """Return (macd_line, signal_line, histogram) as tuples of last values"""
+    if len(prices) < 26:
+        return None, None, None
+    # Exponential weighting
+    def ema(data, span):
+        alpha = 2 / (span + 1)
+        result = np.zeros_like(data)
+        result[0] = data[0]
+        for i in range(1, len(data)):
+            result[i] = alpha * data[i] + (1 - alpha) * result[i-1]
+        return result
+    ema12 = ema(prices, 12)
+    ema26 = ema(prices, 26)
+    macd_line = ema12 - ema26
+    signal_line = ema(macd_line, 9)
+    hist = macd_line - signal_line
+    return macd_line[-1], signal_line[-1], hist[-1]
 
 def analyze_signal(ticker, asset_name):
-    """Return direction, confidence, reason, holding period based on real indicators"""
-    df = get_technical_indicators(ticker)
-    if df is None or len(df) < 50:
-        # Fallback to simple price vs SMA20
+    closes, _ = get_historical_data(ticker)
+    if closes is None or len(closes) < 30:
         price = get_live_price(ticker)
         try:
-            sma20 = yf.download(ticker, period="60d", interval="1d", progress=False)['Close'].rolling(20).mean().iloc[-1]
-            if price > sma20:
-                return "BUY", 60, f"Price above 20-day SMA (fallback mode)", "short"
-            else:
-                return "SELL", 60, f"Price below 20-day SMA (fallback mode)", "short"
+            # quick SMA20 using yfinance (still without pandas)
+            data = yf.download(ticker, period="60d", interval="1d", progress=False)
+            if not data.empty:
+                closes2 = data['Close'].values
+                sma20 = np.mean(closes2[-20:]) if len(closes2) >= 20 else price
+                if price > sma20:
+                    return "BUY", 60, f"Price above 20-day SMA (fallback)", "short"
+                else:
+                    return "SELL", 60, f"Price below 20-day SMA (fallback)", "short"
         except:
-            return random.choice(["BUY","SELL"]), 55, "Limited data, using safe bias", "short"
+            pass
+        return random.choice(["BUY","SELL"]), 55, "Limited data, using safe bias", "short"
     
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    price = latest['Close']
-    sma20 = latest['SMA20']
-    sma50 = latest['SMA50']
-    rsi = latest['RSI']
-    macd = latest['MACD']
-    signal = latest['Signal']
-    macd_hist = latest['MACD_Hist']
-    prev_macd_hist = prev['MACD_Hist']
+    # SMA20 and SMA50
+    sma20 = calculate_sma(closes, 20)
+    sma50 = calculate_sma(closes, 50)
+    price = closes[-1]
+    rsi = calculate_rsi(closes, 14)
+    macd_line, signal_line, hist = calculate_macd(closes)
     
     # Trend detection
-    trend_bull = sma20 > sma50 and price > sma20
-    trend_bear = sma20 < sma50 and price < sma20
+    trend_bull = sma20 is not None and sma50 is not None and price > sma20 and price > sma50
+    trend_bear = sma20 is not None and sma50 is not None and price < sma20 and price < sma50
+    
     # RSI conditions
     rsi_oversold = rsi < 30
     rsi_overbought = rsi > 70
-    # MACD momentum
-    macd_bull = macd > signal and macd_hist > 0
-    macd_bear = macd < signal and macd_hist < 0
-    macd_cross_up = (prev_macd_hist <= 0 and macd_hist > 0)
-    macd_cross_down = (prev_macd_hist >= 0 and macd_hist < 0)
+    
+    # MACD
+    macd_bull = macd_line is not None and signal_line is not None and macd_line > signal_line
+    macd_bear = macd_line is not None and signal_line is not None and macd_line < signal_line
+    macd_hist_positive = hist is not None and hist > 0
     
     # Score based on multiple factors
     buy_score = 0
     sell_score = 0
     reasons = []
     
-    # Trend
     if trend_bull:
         buy_score += 3
         reasons.append("Daily uptrend (price > 20 & 50 SMA)")
@@ -168,7 +190,6 @@ def analyze_signal(ticker, asset_name):
         sell_score += 3
         reasons.append("Daily downtrend (price < 20 & 50 SMA)")
     
-    # RSI
     if rsi_oversold:
         buy_score += 2
         reasons.append(f"RSI oversold ({rsi:.0f}) → potential reversal up")
@@ -178,33 +199,29 @@ def analyze_signal(ticker, asset_name):
     else:
         reasons.append(f"RSI neutral ({rsi:.0f})")
     
-    # MACD
     if macd_bull:
         buy_score += 2
         reasons.append("MACD bullish (above signal line)")
     elif macd_bear:
         sell_score += 2
         reasons.append("MACD bearish (below signal line)")
-    if macd_cross_up:
-        buy_score += 1
-        reasons.append("MACD histogram turned positive (momentum up)")
-    if macd_cross_down:
-        sell_score += 1
-        reasons.append("MACD histogram turned negative (momentum down)")
     
-    # Final decision
+    if macd_hist_positive:
+        buy_score += 1
+        reasons.append("MACD histogram positive (momentum up)")
+    else:
+        sell_score += 1
+        reasons.append("MACD histogram negative (momentum down)")
+    
     if buy_score > sell_score + 2:
         direction = "BUY"
         confidence = min(85, 60 + (buy_score - sell_score) * 3)
         reason = " | ".join(reasons[:3]) + ". Bullish bias."
-        holding = "short"
     elif sell_score > buy_score + 2:
         direction = "SELL"
         confidence = min(85, 60 + (sell_score - buy_score) * 3)
         reason = " | ".join(reasons[:3]) + ". Bearish bias."
-        holding = "short"
     else:
-        # Neutral – use trend as tiebreaker
         if trend_bull:
             direction = "BUY"
             confidence = 60
@@ -217,9 +234,7 @@ def analyze_signal(ticker, asset_name):
             direction = random.choice(["BUY", "SELL"])
             confidence = 55
             reason = "Mixed signals, using conservative bias."
-        holding = "short"
-    
-    holding_text = "Short-term (1-2 days)" if holding == "short" else "Long-term (3-7 days)"
+    holding_text = "Short-term (1-2 days)"
     return direction, confidence, reason, holding_text
 
 def generate_signal(symbol=None):
@@ -253,7 +268,7 @@ def generate_signal(symbol=None):
     }
 
 # ------------------------------------------------------------
-# DATABASE
+# DATABASE (unchanged)
 # ------------------------------------------------------------
 os.makedirs("data", exist_ok=True)
 conn = sqlite3.connect("data/bot.db", check_same_thread=False)
@@ -283,7 +298,7 @@ def ist_now():
     return datetime.datetime.utcnow() + IST
 
 # ------------------------------------------------------------
-# MESSAGE FORMATTERS (Public & VIP)
+# MESSAGE FORMATTERS (same as before)
 # ------------------------------------------------------------
 def format_public(s):
     dec = s["decimals"]
@@ -336,7 +351,7 @@ def format_vip(s):
 🔥 Next signal in 10-15 mins"""
 
 # ------------------------------------------------------------
-# PROMOTIONAL MESSAGES (Public, VIP, User DMs)
+# PROMOTIONAL MESSAGES (unchanged)
 # ------------------------------------------------------------
 PUBLIC_PROMOS = [
     f"💎 *FREE SIGNALS DAILY!* Join free channel: {PUBLIC_CHANNEL_LINK}\n⭐ Upgrade to VIP: {VIP_CHANNEL_LINK}",
@@ -378,7 +393,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 print(f"✅ Bot ready: @{bot.get_me().username}")
 
 # ------------------------------------------------------------
-# BACKGROUND THREADS
+# BACKGROUND THREADS (schedulers, monitor, user promos)
 # ------------------------------------------------------------
 def send_user_promos():
     while True:
@@ -498,7 +513,6 @@ def price_monitor():
                         update_signal_result(sid, "sl_hit")
                         continue
                 if hit:
-                    # profit in pips/points
                     if symbol in ["EUR/USD", "GBP/USD", "AUD/USD", "USD/CAD"]:
                         profit = round(abs(hit - entry) * 10000, 1)
                         unit = "pips"
@@ -508,7 +522,7 @@ def price_monitor():
                     hype = random.choice([
                         f"🎯🔥 *TARGET HIT!* 🔥🎯\n\n{symbol} {direction} → *{label} ✅ REACHED!*\n\n+{profit} {unit} profit!\n\n💎 *KAILASH TRADING*\n👉 Join VIP: {VIP_CHANNEL_LINK}",
                         f"💰 *BOOM! TP HIT!* 💰\n\n{symbol} → *{label} SMASHED!* 🎯\n*{direction} +{profit} {unit}*\n⭐ VIP: {VIP_CHANNEL_LINK}"
-                    ]).format(symbol=symbol, direction=direction, tp=label, profit=profit, unit=unit, vip=VIP_CHANNEL_LINK)
+                    ])
                     try:
                         bot.send_message(PUBLIC_CHANNEL_ID, hype, parse_mode="Markdown")
                         if channel == "vip" and VIP_CHANNEL_ID:
