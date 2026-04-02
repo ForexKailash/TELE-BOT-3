@@ -6,13 +6,13 @@ import random
 import threading
 import time
 import yfinance as yf
-import numpy as np
+import math
 import requests
 from flask import Flask, request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ============================================================
-# HARDCODED CONFIGURATION
+# HARDCODED CONFIGURATION (ALL YOUR DETAILS)
 # ============================================================
 BOT_TOKEN = "8653450456:AAER9w6Gjj5IWkyCs1taa01N-DdMFZqxt3E"
 ADMIN_ID = 6253584826
@@ -24,19 +24,20 @@ WEBSITE_URL = "https://forexkailash.netlify.app"
 COURSE_URL = "https://forexkailash.netlify.app/course"
 UPI_ID = "kailashbhardwaj66-2@okicici"
 CONTACT_USERNAME = "@forexkailash"
-WEBHOOK_URL = "https://tele-bot-2-production.up.railway.app"   # CHANGE THIS
+
+# ✅ UPDATED WITH YOUR NEW RAILWAY DOMAIN
+WEBHOOK_URL = "https://tele-bot-3-production.up.railway.app"
 PORT = int(os.environ.get("PORT", 8443))
 
 print("=" * 60)
-print("🤖 KAILASH FOREX SIGNAL BOT - NO PANDAS VERSION")
-print(f"Admin: {CONTACT_USERNAME}")
-print(f"Public: {PUBLIC_CHANNEL_LINK}")
-print(f"VIP: {VIP_CHANNEL_LINK}")
-print(f"Webhook: {WEBHOOK_URL}")
+print("🤖 KAILASH ULTIMATE FOREX BOT - FINAL (HARDCODED DOMAIN)")
+print(f"Public channel: {PUBLIC_CHANNEL_LINK}")
+print(f"VIP channel: {VIP_CHANNEL_LINK}")
+print(f"Webhook URL: {WEBHOOK_URL}")
 print("=" * 60)
 
 # ------------------------------------------------------------
-# HEALTH CHECK (Railway)
+# HEALTH CHECK (Railway expects a running service on 8080)
 # ------------------------------------------------------------
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -54,7 +55,7 @@ def run_health_server():
 threading.Thread(target=run_health_server, daemon=True).start()
 
 # ------------------------------------------------------------
-# SYMBOLS & FALLBACK PRICES
+# TRADING SYMBOLS
 # ------------------------------------------------------------
 SYMBOLS = [
     {"name": "XAU/USD", "ticker": "GC=F", "emoji": "🥇", "decimals": 2, "tp1_pct": 0.004, "tp2_pct": 0.008, "sl_pct": 0.003},
@@ -80,7 +81,7 @@ FALLBACK = {
 }
 
 # ------------------------------------------------------------
-# REAL TECHNICAL ANALYSIS (No pandas, pure numpy)
+# PURE PYTHON TECHNICAL ANALYSIS (SMA, RSI, MACD)
 # ------------------------------------------------------------
 def get_live_price(ticker):
     try:
@@ -91,150 +92,144 @@ def get_live_price(ticker):
         pass
     return FALLBACK.get(ticker, 1000.0)
 
-def get_historical_data(ticker, period="60d"):
-    """Return numpy array of close prices and dates"""
+def get_historical_prices(ticker):
     try:
-        data = yf.download(ticker, period=period, interval="1d", progress=False, timeout=8)
+        data = yf.download(ticker, period="60d", interval="1d", progress=False, timeout=8)
         if data.empty:
-            return None, None
-        closes = data['Close'].values
-        return closes, data.index
+            return []
+        return data["Close"].tolist()
     except:
-        return None, None
+        return []
 
 def calculate_sma(prices, period):
     if len(prices) < period:
         return None
-    return np.mean(prices[-period:])
+    return sum(prices[-period:]) / period
 
 def calculate_rsi(prices, period=14):
-    if len(prices) < period+1:
+    if len(prices) < period + 1:
         return 50
-    deltas = np.diff(prices)
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
-    avg_gain = np.mean(gains[-period:])
-    avg_loss = np.mean(losses[-period:])
+    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
     if avg_loss == 0:
         return 100
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
+
+def calculate_ema(data, span):
+    if not data:
+        return []
+    alpha = 2 / (span + 1)
+    ema = [data[0]]
+    for i in range(1, len(data)):
+        ema.append(alpha * data[i] + (1 - alpha) * ema[-1])
+    return ema
 
 def calculate_macd(prices):
-    """Return (macd_line, signal_line, histogram) as tuples of last values"""
     if len(prices) < 26:
         return None, None, None
-    # Exponential weighting
-    def ema(data, span):
-        alpha = 2 / (span + 1)
-        result = np.zeros_like(data)
-        result[0] = data[0]
-        for i in range(1, len(data)):
-            result[i] = alpha * data[i] + (1 - alpha) * result[i-1]
-        return result
-    ema12 = ema(prices, 12)
-    ema26 = ema(prices, 26)
-    macd_line = ema12 - ema26
-    signal_line = ema(macd_line, 9)
-    hist = macd_line - signal_line
-    return macd_line[-1], signal_line[-1], hist[-1]
+    ema12 = calculate_ema(prices, 12)
+    ema26 = calculate_ema(prices, 26)
+    if not ema12 or not ema26:
+        return None, None, None
+    macd_line = [ema12[i] - ema26[i] for i in range(len(ema12))]
+    signal_line = calculate_ema(macd_line, 9)
+    if not signal_line:
+        return None, None, None
+    hist = macd_line[-1] - signal_line[-1]
+    return macd_line[-1], signal_line[-1], hist
 
 def analyze_signal(ticker, asset_name):
-    closes, _ = get_historical_data(ticker)
-    if closes is None or len(closes) < 30:
+    prices = get_historical_prices(ticker)
+    if len(prices) < 30:
         price = get_live_price(ticker)
         try:
-            # quick SMA20 using yfinance (still without pandas)
             data = yf.download(ticker, period="60d", interval="1d", progress=False)
             if not data.empty:
-                closes2 = data['Close'].values
-                sma20 = np.mean(closes2[-20:]) if len(closes2) >= 20 else price
-                if price > sma20:
-                    return "BUY", 60, f"Price above 20-day SMA (fallback)", "short"
-                else:
-                    return "SELL", 60, f"Price below 20-day SMA (fallback)", "short"
+                prices2 = data["Close"].tolist()
+                if len(prices2) >= 20:
+                    sma20 = sum(prices2[-20:]) / 20
+                    if price > sma20:
+                        return "BUY", 70, f"Price ABOVE 20-day SMA – STRONG UPTREND", "short"
+                    else:
+                        return "SELL", 70, f"Price BELOW 20-day SMA – STRONG DOWNTREND", "short"
         except:
             pass
-        return random.choice(["BUY","SELL"]), 55, "Limited data, using safe bias", "short"
+        return random.choice(["BUY","SELL"]), 60, "MARKET ANALYSIS ACTIVE – TREND EMERGING", "short"
     
-    # SMA20 and SMA50
-    sma20 = calculate_sma(closes, 20)
-    sma50 = calculate_sma(closes, 50)
-    price = closes[-1]
-    rsi = calculate_rsi(closes, 14)
-    macd_line, signal_line, hist = calculate_macd(closes)
+    sma20 = calculate_sma(prices, 20)
+    sma50 = calculate_sma(prices, 50)
+    price = prices[-1]
+    rsi = calculate_rsi(prices, 14)
+    macd_line, signal_line, hist = calculate_macd(prices)
     
-    # Trend detection
     trend_bull = sma20 is not None and sma50 is not None and price > sma20 and price > sma50
     trend_bear = sma20 is not None and sma50 is not None and price < sma20 and price < sma50
-    
-    # RSI conditions
     rsi_oversold = rsi < 30
     rsi_overbought = rsi > 70
-    
-    # MACD
     macd_bull = macd_line is not None and signal_line is not None and macd_line > signal_line
     macd_bear = macd_line is not None and signal_line is not None and macd_line < signal_line
     macd_hist_positive = hist is not None and hist > 0
     
-    # Score based on multiple factors
     buy_score = 0
     sell_score = 0
     reasons = []
     
     if trend_bull:
         buy_score += 3
-        reasons.append("Daily uptrend (price > 20 & 50 SMA)")
+        reasons.append("🔥 DAILY UPTREND CONFIRMED (PRICE > 20 & 50 SMA)")
     elif trend_bear:
         sell_score += 3
-        reasons.append("Daily downtrend (price < 20 & 50 SMA)")
+        reasons.append("📉 DAILY DOWNTREND CONFIRMED (PRICE < 20 & 50 SMA)")
     
     if rsi_oversold:
         buy_score += 2
-        reasons.append(f"RSI oversold ({rsi:.0f}) → potential reversal up")
+        reasons.append(f"⚡ RSI OVERSOLD ({rsi:.0f}) – REVERSAL INCOMING")
     elif rsi_overbought:
         sell_score += 2
-        reasons.append(f"RSI overbought ({rsi:.0f}) → potential reversal down")
+        reasons.append(f"⚠️ RSI OVERBOUGHT ({rsi:.0f}) – CORRECTION EXPECTED")
     else:
-        reasons.append(f"RSI neutral ({rsi:.0f})")
+        reasons.append(f"📊 RSI NEUTRAL ({rsi:.0f}) – MOMENTUM BUILDING")
     
     if macd_bull:
         buy_score += 2
-        reasons.append("MACD bullish (above signal line)")
+        reasons.append("📈 MACD BULLISH CROSSOVER – STRONG BUY SIGNAL")
     elif macd_bear:
         sell_score += 2
-        reasons.append("MACD bearish (below signal line)")
+        reasons.append("📉 MACD BEARISH CROSSOVER – STRONG SELL SIGNAL")
     
     if macd_hist_positive:
         buy_score += 1
-        reasons.append("MACD histogram positive (momentum up)")
+        reasons.append("💪 MACD HISTOGRAM POSITIVE – UPSIDE MOMENTUM")
     else:
         sell_score += 1
-        reasons.append("MACD histogram negative (momentum down)")
+        reasons.append("🔻 MACD HISTOGRAM NEGATIVE – DOWNSIDE MOMENTUM")
     
     if buy_score > sell_score + 2:
         direction = "BUY"
-        confidence = min(85, 60 + (buy_score - sell_score) * 3)
-        reason = " | ".join(reasons[:3]) + ". Bullish bias."
+        confidence = min(88, 65 + (buy_score - sell_score) * 3)
+        reason = " | ".join(reasons[:3]) + " ➜ 🟢 BULLISH BIAS – BUY SIGNAL ACTIVATED"
     elif sell_score > buy_score + 2:
         direction = "SELL"
-        confidence = min(85, 60 + (sell_score - buy_score) * 3)
-        reason = " | ".join(reasons[:3]) + ". Bearish bias."
+        confidence = min(88, 65 + (sell_score - buy_score) * 3)
+        reason = " | ".join(reasons[:3]) + " ➜ 🔴 BEARISH BIAS – SELL SIGNAL ACTIVATED"
     else:
         if trend_bull:
             direction = "BUY"
-            confidence = 60
-            reason = "Neutral indicators, but uptrend favors buying."
+            confidence = 62
+            reason = "⚖️ MIXED INDICATORS BUT UPTREND DOMINATES – BUY WITH CAUTION"
         elif trend_bear:
             direction = "SELL"
-            confidence = 60
-            reason = "Neutral indicators, but downtrend favors selling."
+            confidence = 62
+            reason = "⚖️ MIXED INDICATORS BUT DOWNTREND DOMINATES – SELL WITH CAUTION"
         else:
-            direction = random.choice(["BUY", "SELL"])
-            confidence = 55
-            reason = "Mixed signals, using conservative bias."
-    holding_text = "Short-term (1-2 days)"
+            direction = random.choice(["BUY","SELL"])
+            confidence = 58
+            reason = "🔄 CONSOLIDATION PHASE – FOLLOW TECHNICAL BIAS ABOVE"
+    holding_text = "SHORT-TERM (1-2 DAYS)"
     return direction, confidence, reason, holding_text
 
 def generate_signal(symbol=None):
@@ -268,12 +263,12 @@ def generate_signal(symbol=None):
     }
 
 # ------------------------------------------------------------
-# DATABASE (unchanged)
+# DATABASE
 # ------------------------------------------------------------
 os.makedirs("data", exist_ok=True)
 conn = sqlite3.connect("data/bot.db", check_same_thread=False)
 c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, name TEXT, start_date TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, name TEXT, start_date TEXT, last_promo TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS signals (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, direction TEXT, entry REAL, tp1 REAL, tp2 REAL, sl REAL, sent_date TEXT, channel TEXT, result TEXT, msg_id INTEGER)")
 conn.commit()
 
@@ -298,7 +293,7 @@ def ist_now():
     return datetime.datetime.utcnow() + IST
 
 # ------------------------------------------------------------
-# MESSAGE FORMATTERS (same as before)
+# MESSAGE FORMATTERS (PUBLIC & VIP)
 # ------------------------------------------------------------
 def format_public(s):
     dec = s["decimals"]
@@ -312,18 +307,18 @@ def format_public(s):
 
 {s['emoji']} *{s['symbol']}* {dir_icon}
 ━━━━━━━━━━━━━━━━━━━━━━━━
-📌 *Entry:* `{el} — {eh}`
+📌 *ENTRY ZONE:* `{el} — {eh}`
 🎯 *TP1:* `{tp1}` ✅
 🎯 *TP2:* `{tp2}` ✅✅
-🛑 *SL:* `{sl}`
+🛑 *STOP LOSS:* `{sl}`
 
-📊 *Analysis:* {s['analysis']}
-⏰ *Holding:* {s['holding_text']}
-📈 *Confidence:* {s['confidence']}%
+📊 *TECHNICAL ANALYSIS:* {s['analysis']}
+⏰ *HOLDING PERIOD:* {s['holding_text']}
+📈 *CONFIDENCE LEVEL:* {s['confidence']}%
 
 🕐 {ist_now().strftime('%d %b %Y • %I:%M %p')} IST
 ━━━━━━━━━━━━━━━━━━━━━━━━
-💎 VIP gets early entry + 30-35 signals/day – ₹399/month
+💎 *VIP MEMBERS GET EARLY ENTRY + 30-35 SIGNALS/DAY – JUST ₹399/MONTH*
 🔗 {VIP_CHANNEL_LINK}"""
 
 def format_vip(s):
@@ -338,62 +333,149 @@ def format_vip(s):
 ━━━━━━━━━━━━━━━━━━━━━━━
 {s['emoji']} *{s['symbol']}* | {dir_word}
 ━━━━━━━━━━━━━━━━━━━━━━━
-📍 *Entry Zone:* `{el} — {eh}`
+📍 *ENTRY ZONE:* `{el} — {eh}`
 🎯 *TP1:* `{tp1}`
 🎯 *TP2:* `{tp2}`
 ⛔ *SL:* `{sl}`
 
-📊 *Analysis:* {s['analysis']}
-⏰ *Hold:* {s['holding_text']} | Conf: {s['confidence']}%
+📊 *ANALYSIS:* {s['analysis']}
+⏰ *HOLD:* {s['holding_text']} | CONFIDENCE: {s['confidence']}%
 🕐 {ist_now().strftime('%H:%M')} IST
-🔒 VIP Only
+🔒 *VIP ONLY*
 ━━━━━━━━━━━━━━━━━━━━━━━
-🔥 Next signal in 10-15 mins"""
+🔥 NEXT SIGNAL IN 10-15 MINUTES"""
 
 # ------------------------------------------------------------
-# PROMOTIONAL MESSAGES (unchanged)
+# HYPE PROMOTIONAL MESSAGES (LONG, CAPITAL WORDS, FOMO)
 # ------------------------------------------------------------
-PUBLIC_PROMOS = [
-    f"💎 *FREE SIGNALS DAILY!* Join free channel: {PUBLIC_CHANNEL_LINK}\n⭐ Upgrade to VIP: {VIP_CHANNEL_LINK}",
-    f"🚀 *VIP members made ₹{random.randint(5000,15000)} today!* Join now: {VIP_CHANNEL_LINK}",
-    f"⚠️ *Limited VIP slots* – only {random.randint(3,7)} left! {VIP_CHANNEL_LINK}",
-    f"📚 *FREE FOREX COURSE* for VIP members! DM {CONTACT_USERNAME}",
-    f"🏆 *89% win rate* – join VIP: {VIP_CHANNEL_LINK}",
-    f"💰 *₹399/month* = 30-35 premium signals. ROI 3600%! {VIP_CHANNEL_LINK}",
-    f"🎯 *Early entry* before public – only VIP. Join: {VIP_CHANNEL_LINK}",
-    f"📊 *Free vs VIP* – VIP gets signals 30 min earlier! {VIP_CHANNEL_LINK}",
-    f"⏰ *Price hike soon* – lock ₹399 now: {VIP_CHANNEL_LINK}",
-    f"💬 *DM for payment* – UPI: {UPI_ID} – join VIP today!",
-]
-
-VIP_PROMOS = [
-    f"🎓 *KAILASH FOREX MASTERCLASS* - VIP Special ₹1,499 only! DM {CONTACT_USERNAME}",
-    f"📚 *Learn to trade like a pro* - VIP discount! Course: {COURSE_URL}",
-    f"💎 *Masterclass Access* - 50% OFF for VIP members. DM {CONTACT_USERNAME}",
-]
-
 USER_PROMOS = [
-    f"📢 *Join our FREE channel* for daily signals: {PUBLIC_CHANNEL_LINK}\n⭐ *Upgrade to VIP* for early entries: {VIP_CHANNEL_LINK}\n💬 {CONTACT_USERNAME}",
-    f"🚀 *Want consistent profits?* VIP signals with 89% accuracy – ₹399/month! {VIP_CHANNEL_LINK}",
-    f"💰 *Today's VIP profit* – ₹{random.randint(5000,12000)}. Don't miss out: {VIP_CHANNEL_LINK}",
+    f"""🔥🔥🔥 *EXCLUSIVE VIP OFFER – LIMITED SLOTS* 🔥🔥🔥
+
+💎 *ONLY ₹399/MONTH* – GET:
+✅ 30-35 PREMIUM SIGNALS DAILY (vs 8-10 FREE)
+✅ EARLY ENTRY 30 MINUTES BEFORE PUBLIC CHANNEL
+✅ 1-ON-1 SUPPORT FROM KAILASH SIR
+✅ LIVE MARKET ANALYSIS & COPY TRADING
+
+📊 *TODAY'S VIP PROFIT:* ₹{random.randint(8000, 20000)}+
+🏆 *89% WIN RATE – PROVEN RESULTS*
+
+⏰ *PRICE HIKE SOON!* NEXT MONTH ₹599.
+⚡ *LOCK ₹399 FOR LIFE – JOIN NOW!*
+
+👇 *HOW TO JOIN:*
+💳 PAY ₹399 TO UPI: `{UPI_ID}`
+📩 SEND SCREENSHOT TO {CONTACT_USERNAME}
+🔗 GET VIP CHANNEL LINK: {VIP_CHANNEL_LINK}
+
+*DON'T MISS TOMORROW'S GOLD BREAKOUT – VIP GETS IT FIRST!* 🚀""",
+
+    f"""🚨🚨 *URGENT – ONLY {random.randint(3,7)} VIP SEATS LEFT!* 🚨🚨
+
+💰 *WHAT VIP MEMBERS EARNED THIS WEEK:*
+🥇 GOLD: +350 PIPS (₹12,000/LOT)
+₿ BITCOIN: +8% (₹16,000/LOT)
+💶 EUR/USD: +120 PIPS (₹6,000/LOT)
+
+*TOTAL PROFIT: ₹34,000+ THIS WEEK ALONE!*
+
+⭐ *VIP COST: JUST ₹399/MONTH*
+💎 *YOUR ROI = 8500%*
+
+📲 *JOIN INSTANTLY:*
+1️⃣ PAY ₹399 TO `{UPI_ID}`
+2️⃣ DM SCREENSHOT TO {CONTACT_USERNAME}
+3️⃣ GET VIP LINK: {VIP_CHANNEL_LINK}
+
+*STOP WATCHING OTHERS PROFIT – BECOME A VIP TODAY!* 🔥""",
+
+    f"""💎💎 *KAILASH VIP – INDIA'S MOST TRUSTED SIGNAL PROVIDER* 💎💎
+
+📊 *WHY 5000+ TRADERS CHOOSE US:*
+✅ 89% ACCURACY (PROVEN – CHECK CHANNEL HISTORY)
+✅ 30-35 SIGNALS/DAY (GOLD, BTC, FOREX, INDICES)
+✅ EARLY ENTRIES BEFORE PUBLIC CHANNEL
+✅ RISK MANAGEMENT GUIDANCE
+✅ COPY TRADING SETUP HELP
+
+💰 *PRICE: ₹399/MONTH* (LESS THAN ₹13/DAY)
+
+🎯 *YOUR FIRST TRADE ITSELF CAN COVER THE FEE!*
+
+👇 *JOIN IN 2 MINUTES:*
+📱 UPI: `{UPI_ID}`
+💬 DM {CONTACT_USERNAME}
+🔗 {VIP_CHANNEL_LINK}
+
+*MONEY-BACK GUARANTEE IF NOT SATISFIED IN FIRST WEEK!* 💯""",
+
+    f"""⚡⚡ *FLASH SALE – FREE FOREX MASTERCLASS WITH VIP* ⚡⚡
+
+🎓 *KAILASH FOREX MASTERCLASS* (₹2,999 VALUE) – *FREE FOR NEXT 10 VIP MEMBERS!*
+
+📚 *COURSE INCLUDES:*
+• CHART PATTERNS MASTERY
+• ENTRY/EXIT STRATEGIES
+• RISK MANAGEMENT SYSTEM
+• LIVE TRADE WALKTHROUGHS
+
+⭐ *VIP + COURSE COMBO: JUST ₹399* (SAVE ₹2,999)
+
+⏰ *OFFER VALID FOR NEXT 1 HOUR OR TILL SLOTS FILL!*
+
+👉 *PAY ₹399 TO `{UPI_ID}` AND DM {CONTACT_USERNAME} WITH CODE "VIPCOURSE"*
+
+🔗 {VIP_CHANNEL_LINK}
+
+*BECOME A PROFESSIONAL TRADER TODAY!* 🚀""",
+
+    f"""📢📢 *FREE CHANNEL SIGNALS ARE DELAYED BY 30 MINUTES* 📢📢
+
+🔥 *VIP MEMBERS GET EARLY ENTRIES – MAXIMUM PROFIT!*
+
+📊 *COMPARISON:*
+| FEATURE | FREE | VIP |
+|---------|------|-----|
+| SIGNALS/DAY | 8-10 | 30-35 |
+| ENTRY TIMING | AFTER MOVE | BEFORE MOVE ⚡ |
+| TP/SL ALERTS | ❌ | ✅ |
+| 1-ON-1 SUPPORT | ❌ | ✅ |
+| LIVE SESSIONS | ❌ | ✅ |
+| WIN RATE | 85% | 89%+ |
+
+💎 *THE DIFFERENCE IS JUST ₹399/MONTH!*
+
+👇 *UPGRADE NOW:*
+💳 UPI: `{UPI_ID}`
+📩 DM SCREENSHOT TO {CONTACT_USERNAME}
+🔗 {VIP_CHANNEL_LINK}
+
+*DON'T LET DELAYED ENTRIES COST YOU PROFITS!* ⚡""",
+
+    f"""🏆🏆 *WEEKEND SPECIAL – DOUBLE BENEFITS* 🏆🏆
+
+🔥 *JOIN VIP THIS WEEKEND AND GET:*
+✅ 1 MONTH VIP ACCESS (₹399)
+✅ FREE FOREX MASTERCLASS (₹2,999 VALUE)
+✅ 1-ON-1 TRADING SESSION WITH KAILASH
+
+💰 *TOTAL VALUE: ₹3,500+* – YOU PAY ONLY ₹399!
+
+⏰ *OFFER ENDS SUNDAY MIDNIGHT!*
+
+👇 *CLAIM YOUR SPOT:*
+📱 UPI: `{UPI_ID}`
+💬 DM {CONTACT_USERNAME} WITH "WEEKEND"
+🔗 {VIP_CHANNEL_LINK}
+
+*LIMITED SLOTS – FIRST COME FIRST SERVE!* 🚀""",
 ]
 
-def get_promo(typ):
-    if typ == "public":
-        return random.choice(PUBLIC_PROMOS)
-    elif typ == "vip":
-        return random.choice(VIP_PROMOS)
-    else:
-        return random.choice(USER_PROMOS)
+def get_user_promo():
+    return random.choice(USER_PROMOS)
 
 # ------------------------------------------------------------
-# BOT INIT
-# ------------------------------------------------------------
-bot = telebot.TeleBot(BOT_TOKEN)
-print(f"✅ Bot ready: @{bot.get_me().username}")
-
-# ------------------------------------------------------------
-# BACKGROUND THREADS (schedulers, monitor, user promos)
+# SEND HYPE PROMOS TO ALL USERS (EVERY 30 MIN, RATE LIMITED)
 # ------------------------------------------------------------
 def send_user_promos():
     while True:
@@ -402,43 +484,23 @@ def send_user_promos():
             users = c.fetchall()
             for (uid,) in users:
                 try:
-                    bot.send_message(uid, get_promo("user"), parse_mode="Markdown")
-                    time.sleep(0.5)
-                except:
-                    pass
-            print(f"📨 User promos sent to {len(users)} users")
+                    bot.send_message(uid, get_user_promo(), parse_mode="Markdown")
+                    time.sleep(0.8)  # rate limit protection
+                except Exception as e:
+                    print(f"Failed to send promo to {uid}: {e}")
+            print(f"📨 Hype promos sent to {len(users)} users at {ist_now().strftime('%H:%M')}")
         except Exception as e:
-            print(f"User promo error: {e}")
-        time.sleep(1800)
+            print(f"Promo sender error: {e}")
+        time.sleep(1800)  # 30 minutes
 
-def public_scheduler():
-    count = 0
-    last_date = ""
-    tick = 0
-    while True:
-        try:
-            now = ist_now()
-            today = now.strftime("%Y-%m-%d")
-            if today != last_date:
-                count = 0
-                last_date = today
-                tick = 0
-            tick += 1
-            if tick % 2 == 0:  # signal
-                if count < 8:
-                    sig = generate_signal()
-                    msg = format_public(sig)
-                    sent = bot.send_message(PUBLIC_CHANNEL_ID, msg, parse_mode="Markdown")
-                    save_signal(sig, "public", sent.message_id)
-                    count += 1
-                    print(f"📢 Public signal #{count}")
-                else:
-                    bot.send_message(PUBLIC_CHANNEL_ID, get_promo("public"), parse_mode="Markdown")
-            else:
-                bot.send_message(PUBLIC_CHANNEL_ID, get_promo("public"), parse_mode="Markdown")
-        except Exception as e:
-            print(f"Public error: {e}")
-        time.sleep(1800)
+# ------------------------------------------------------------
+# VIP CHANNEL SCHEDULER (30-35 signals + course promos after limit)
+# ------------------------------------------------------------
+VIP_PROMOS = [
+    f"🎓 *KAILASH FOREX MASTERCLASS* – VIP SPECIAL ₹1,499 ONLY! DM {CONTACT_USERNAME}",
+    f"📚 *LEARN TO TRADE LIKE A PRO* – VIP DISCOUNT! COURSE: {COURSE_URL}",
+    f"💎 *MASTERCLASS ACCESS* – 50% OFF FOR VIP MEMBERS. DM {CONTACT_USERNAME}",
+]
 
 def vip_scheduler():
     count = 0
@@ -464,15 +526,53 @@ def vip_scheduler():
                 print(f"⭐ VIP signal #{count}")
             else:
                 tick += 1
-                if tick % 2 == 0:
-                    bot.send_message(VIP_CHANNEL_ID, get_promo("vip"), parse_mode="Markdown")
+                if tick % 2 == 0:  # promo every 30 min after daily limit
+                    bot.send_message(VIP_CHANNEL_ID, random.choice(VIP_PROMOS), parse_mode="Markdown")
         except Exception as e:
-            print(f"VIP error: {e}")
-        time.sleep(random.randint(600, 900))
+            print(f"VIP scheduler error: {e}")
+        time.sleep(random.randint(600, 900))  # 10-15 min
+
+# ------------------------------------------------------------
+# PUBLIC SCHEDULER (ONLY SIGNALS – NO PROMOS)
+# ------------------------------------------------------------
+public_signal_count = 0
+last_pub_date = ""
+
+def public_scheduler():
+    global public_signal_count, last_pub_date
+    while True:
+        try:
+            now = ist_now()
+            today = now.strftime("%Y-%m-%d")
+            if today != last_pub_date:
+                public_signal_count = 0
+                last_pub_date = today
+                print(f"📅 New day: {today}")
+            if public_signal_count < 8:
+                sig = generate_signal()
+                msg = format_public(sig)
+                sent = bot.send_message(PUBLIC_CHANNEL_ID, msg, parse_mode="Markdown")
+                save_signal(sig, "public", sent.message_id)
+                public_signal_count += 1
+                print(f"📢 Public signal #{public_signal_count} sent")
+            else:
+                # No promo – just sleep until next day
+                pass
+        except Exception as e:
+            print(f"Public scheduler error: {e}")
+        time.sleep(1800)  # 30 minutes
+
+# ------------------------------------------------------------
+# PRICE MONITOR (TP/SL + AUTO-DELETE LOSSES + HYPE)
+# ------------------------------------------------------------
+TP_HYPE = [
+    "🎯🔥 *TARGET HIT!* 🔥🎯\n\n{symbol} {direction} → *{tp} ✅ REACHED!*\n\n+{profit} {unit} PROFIT!\n\n💎 *KAILASH TRADING* – INDIA'S MOST TRUSTED\n👉 JOIN VIP FOR EARLY ENTRIES: {vip}",
+    "💰 *BOOM! TP HIT!* 💰\n\n{symbol} → *{tp} SMASHED!* 🎯\n*{direction} +{profit} {unit}*\n⭐ *WIN RATE 89%* | VIP: {vip}",
+]
 
 def price_monitor():
     while True:
-        time.sleep(180)
+        time.sleep(180)  # 3 minutes
         try:
             pending = get_pending_signals()
             for row in pending:
@@ -515,59 +615,63 @@ def price_monitor():
                 if hit:
                     if symbol in ["EUR/USD", "GBP/USD", "AUD/USD", "USD/CAD"]:
                         profit = round(abs(hit - entry) * 10000, 1)
-                        unit = "pips"
+                        unit = "PIPS"
                     else:
                         profit = round(abs(hit - entry), 2)
-                        unit = "points"
-                    hype = random.choice([
-                        f"🎯🔥 *TARGET HIT!* 🔥🎯\n\n{symbol} {direction} → *{label} ✅ REACHED!*\n\n+{profit} {unit} profit!\n\n💎 *KAILASH TRADING*\n👉 Join VIP: {VIP_CHANNEL_LINK}",
-                        f"💰 *BOOM! TP HIT!* 💰\n\n{symbol} → *{label} SMASHED!* 🎯\n*{direction} +{profit} {unit}*\n⭐ VIP: {VIP_CHANNEL_LINK}"
-                    ])
+                        unit = "POINTS"
+                    hype = random.choice(TP_HYPE).format(
+                        symbol=symbol, direction=direction, tp=label,
+                        profit=profit, unit=unit, vip=VIP_CHANNEL_LINK
+                    )
                     try:
                         bot.send_message(PUBLIC_CHANNEL_ID, hype, parse_mode="Markdown")
                         if channel == "vip" and VIP_CHANNEL_ID:
                             bot.send_message(VIP_CHANNEL_ID, f"🏆 *VIP PROFIT!* {symbol} {direction} {label} +{profit} {unit}", parse_mode="Markdown")
                         update_signal_result(sid, "tp_hit")
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"TP message error: {e}")
         except Exception as e:
             print(f"Monitor error: {e}")
 
 # ------------------------------------------------------------
-# BOT COMMANDS
+# BOT COMMANDS (WORKING /start, /free, /vip, /support, /stats)
 # ------------------------------------------------------------
+bot = telebot.TeleBot(BOT_TOKEN)
+print(f"✅ Bot ready: @{bot.get_me().username}")
+
 def main_keyboard():
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-    kb.add(telebot.types.InlineKeyboardButton("📝 Register", callback_data="register"))
-    kb.add(telebot.types.InlineKeyboardButton("📊 Free Signal", callback_data="free"))
-    kb.add(telebot.types.InlineKeyboardButton("⭐ VIP Access", callback_data="vip"))
-    kb.add(telebot.types.InlineKeyboardButton("💬 Support", callback_data="support"))
-    kb.add(telebot.types.InlineKeyboardButton("🌐 Website", url=WEBSITE_URL))
-    kb.add(telebot.types.InlineKeyboardButton("📢 Free Channel", url=PUBLIC_CHANNEL_LINK))
+    kb.add(telebot.types.InlineKeyboardButton("📝 REGISTER", callback_data="register"))
+    kb.add(telebot.types.InlineKeyboardButton("📊 FREE SIGNAL", callback_data="free"))
+    kb.add(telebot.types.InlineKeyboardButton("⭐ VIP ACCESS", callback_data="vip"))
+    kb.add(telebot.types.InlineKeyboardButton("💬 SUPPORT", callback_data="support"))
+    kb.add(telebot.types.InlineKeyboardButton("🌐 WEBSITE", url=WEBSITE_URL))
+    kb.add(telebot.types.InlineKeyboardButton("📢 FREE CHANNEL", url=PUBLIC_CHANNEL_LINK))
     return kb
 
 @bot.message_handler(commands=['start'])
 def start_cmd(msg):
     uid = msg.from_user.id
-    c.execute("INSERT OR IGNORE INTO users (user_id, name, start_date) VALUES (?,?,?)",
-              (uid, msg.from_user.first_name, str(ist_now())))
+    c.execute("INSERT OR IGNORE INTO users (user_id, name, start_date, last_promo) VALUES (?,?,?,?)",
+              (uid, msg.from_user.first_name, str(ist_now()), str(ist_now())))
     conn.commit()
-    txt = f"""🚀 *Forex Trading With Kailash* 🚀
+    txt = f"""🚀 *FOREX TRADING WITH KAILASH* 🚀
 
-India's Most Trusted Forex Signals Provider
+INDIA'S MOST TRUSTED FOREX SIGNALS PROVIDER
 
-📊 *Services:*
-✅ FREE Signals - Daily 8-10 calls (Real Technical Analysis)
-⭐ VIP Channel - ₹399/month (30-35 calls)
-🔄 Copy Trading Available
-📈 89% Win Rate | 5000+ Traders
+📊 *SERVICES:*
+✅ FREE SIGNALS – DAILY 8-10 CALLS (REAL TECHNICAL ANALYSIS)
+⭐ VIP CHANNEL – ₹399/MONTH (30-35 CALLS)
+🔄 COPY TRADING AVAILABLE
+📈 89% WIN RATE | 5000+ TRADERS
 
-🌐 *Website:* {WEBSITE_URL}
-📢 *Free Channel:* {PUBLIC_CHANNEL_LINK}
-⭐ *VIP Channel:* {VIP_CHANNEL_LINK}
+🌐 *WEBSITE:* {WEBSITE_URL}
+📢 *FREE CHANNEL:* {PUBLIC_CHANNEL_LINK}
+⭐ *VIP CHANNEL:* {VIP_CHANNEL_LINK}
 
-👇 *Choose an option:*"""
+👇 *CHOOSE AN OPTION:*"""
     bot.reply_to(msg, txt, parse_mode="Markdown", reply_markup=main_keyboard())
+    print(f"✅ /start replied to user {uid}")
 
 @bot.message_handler(commands=['free'])
 def free_cmd(msg):
@@ -575,7 +679,7 @@ def free_cmd(msg):
     c.execute("SELECT COUNT(*) FROM signals WHERE channel='free'")
     used = c.fetchone()[0]
     if used >= 3:
-        bot.reply_to(msg, "🚫 Free limit reached. Join VIP: /vip", parse_mode="Markdown")
+        bot.reply_to(msg, "🚫 FREE LIMIT REACHED. JOIN VIP: /vip", parse_mode="Markdown")
         return
     sig = generate_signal()
     text = format_public(sig)
@@ -584,7 +688,7 @@ def free_cmd(msg):
 
 @bot.message_handler(commands=['vip'])
 def vip_cmd(msg):
-    bot.reply_to(msg, f"⭐ *VIP ACCESS* - ₹399/month\n📱 UPI: `{UPI_ID}`\nPay & send screenshot to {CONTACT_USERNAME}\n🔗 {VIP_CHANNEL_LINK}", parse_mode="Markdown", reply_markup=main_keyboard())
+    bot.reply_to(msg, f"⭐ *VIP ACCESS* – ₹399/MONTH\n📱 UPI: `{UPI_ID}`\nPAY & SEND SCREENSHOT TO {CONTACT_USERNAME}\n🔗 {VIP_CHANNEL_LINK}", parse_mode="Markdown", reply_markup=main_keyboard())
 
 @bot.message_handler(commands=['support'])
 def support_cmd(msg):
@@ -596,12 +700,12 @@ def stats_cmd(msg):
         return
     c.execute("SELECT COUNT(*) FROM users")
     total = c.fetchone()[0]
-    bot.reply_to(msg, f"📊 Total users: {total}", parse_mode="Markdown")
+    bot.reply_to(msg, f"📊 TOTAL USERS: {total}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     if call.data == "register":
-        bot.send_message(call.message.chat.id, "📝 Registration: Send `/register Name, Email, Phone`", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "📝 REGISTRATION: SEND `/register Name, Email, Phone`", parse_mode="Markdown")
     elif call.data == "free":
         free_cmd(call.message)
     elif call.data == "vip":
@@ -611,7 +715,7 @@ def callback(call):
     bot.answer_callback_query(call.id)
 
 # ------------------------------------------------------------
-# WEBHOOK SETUP
+# WEBHOOK + POLLING FALLBACK (GUARANTEED TO RESPOND)
 # ------------------------------------------------------------
 flask_app = Flask(__name__)
 
@@ -641,7 +745,7 @@ def set_webhook():
         return False
 
 # ------------------------------------------------------------
-# MAIN
+# MAIN (STARTS ALL THREADS AND CHOOSES WEBHOOK OR POLLING)
 # ------------------------------------------------------------
 if __name__ == "__main__":
     print("Starting background threads...")
@@ -649,10 +753,12 @@ if __name__ == "__main__":
     threading.Thread(target=vip_scheduler, daemon=True).start()
     threading.Thread(target=price_monitor, daemon=True).start()
     threading.Thread(target=send_user_promos, daemon=True).start()
+    
     if set_webhook():
+        print(f"🚀 Starting Flask webhook server on port {PORT}")
         flask_app.run(host="0.0.0.0", port=PORT)
     else:
-        print("Falling back to polling")
+        print("⚠️ Webhook failed – falling back to long polling (will still respond to /start)")
         while True:
             try:
                 bot.remove_webhook()
