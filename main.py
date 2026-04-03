@@ -7,17 +7,19 @@ import threading
 import time
 import random
 import logging
+import traceback
 from datetime import datetime
 from flask import Flask
 from PIL import Image, ImageDraw, ImageFont
 import io
 import os
+import sys
 
 # ===================== HARDCODED CONFIGURATION =====================
 BOT_TOKEN = "8653450456:AAER9w6Gjj5IWkyCs1taa01N-DdMFZqxt3E"
 ADMIN_ID = 6253584826
-PUBLIC_CHANNEL_ID = -1003807818260
-VIP_CHANNEL_ID = -1003826269063
+PUBLIC_CHANNEL_ID = -1003807818260   # Ensure bot is admin here
+VIP_CHANNEL_ID = -1003826269063      # Ensure bot is admin here
 PUBLIC_LINK = "https://t.me/tradewithkailashh"
 VIP_LINK = "https://t.me/+Snj0BVAwjDo3NTA1"
 WEBSITE = "https://forexkailash.netlify.app"
@@ -26,7 +28,7 @@ UPI = "kailashbhardwaj66-2@okicici"
 CONTACT = "@forexkailash"
 TWELVEDATA_API_KEY = "02ef5f7e644f43d18bbe5ae297d0666b"
 
-# Trading pairs (same as before)
+# Trading pairs
 PAIRS = {
     "EURUSD": {"yf": "EURUSD=X", "td": "EUR/USD"},
     "GBPUSD": {"yf": "GBPUSD=X", "td": "GBP/USD"},
@@ -44,7 +46,7 @@ PAIRS = {
     "DOWJONES": {"yf": "^DJI", "td": "DJI"}
 }
 
-# Promos (shortened for brevity, but you can keep full list)
+# Promos (short but effective)
 PUBLIC_PROMOS = [
     "🔥🚀 JOIN VIP FOR HIGH ACCURACY SIGNALS! 🚀🔥\n\n✅ 20-25 SIGNALS DAILY\n✅ TP/SL WITH EVERY SIGNAL\n✅ MULTI ASSET COVERAGE\n👉 {vip_link}",
     "💰💎 STOP LOSING, START WINNING! 💎💰\nVIP MEMBERS GET EXACT ENTRY ZONE, 3 TPs, SL.\nJOIN NOW: {vip_link}"
@@ -55,7 +57,7 @@ VIP_PROMOS = [
 ]
 
 # ===================== LOGGING =====================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ===================== DATABASE =====================
@@ -76,6 +78,7 @@ def init_db():
                       tp1_hit INTEGER DEFAULT 0, tp2_hit INTEGER DEFAULT 0, tp3_hit INTEGER DEFAULT 0)''')
         conn.commit()
         conn.close()
+        logger.info("Database initialized")
 
 init_db()
 
@@ -243,6 +246,7 @@ def generate_and_send_signal(symbol, is_public, chat_id):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (symbol, direction, entry, tp1, tp2, tp3, sl, confidence, holding_period, reason,
              datetime.now().isoformat(), 'active', 1 if is_public else 0, chat_id, msg.message_id))
+        logger.info(f"Signal sent: {symbol} {direction} to {'public' if is_public else 'vip'}")
         return True
     except Exception as e:
         logger.error(f"Signal generation error: {e}")
@@ -333,14 +337,18 @@ def schedule_signals():
                 last_vip = 0
                 last_day = now.day
             if last_public < 6:
-                for sym in random.sample(list(PAIRS.keys()), min(3, len(PAIRS))):
+                symbols = list(PAIRS.keys())
+                random.shuffle(symbols)
+                for sym in symbols:
                     if generate_and_send_signal(sym, True, PUBLIC_CHANNEL_ID):
                         last_public += 1
                         time.sleep(300)
                         if last_public >= 8:
                             break
             if last_vip < 20:
-                for sym in random.sample(list(PAIRS.keys()), min(5, len(PAIRS))):
+                symbols = list(PAIRS.keys())
+                random.shuffle(symbols)
+                for sym in symbols:
                     if generate_and_send_signal(sym, False, VIP_CHANNEL_ID):
                         last_vip += 1
                         time.sleep(900)
@@ -385,6 +393,7 @@ def send_welcome(message):
         bot.send_message(message.chat.id, 
             "🚀 *Welcome to KAILASH TRADING* 🚀\n\nGet accurate Forex, Commodities, Crypto & Indices signals.\n\nUse buttons below:",
             reply_markup=main_menu(), parse_mode='Markdown')
+        logger.info(f"Sent welcome to {message.from_user.id}")
     except Exception as e:
         logger.error(f"Start error: {e}")
 
@@ -433,7 +442,6 @@ def callback_handler(call):
 
 @bot.message_handler(commands=['free'])
 def free_signal_cmd(message):
-    # same logic as callback free_signal
     user = db_fetch_one("SELECT free_signals_used FROM users WHERE user_id=?", (message.from_user.id,))
     if not user:
         bot.reply_to(message, "Please /start and register first!")
@@ -468,16 +476,20 @@ def index():
     return "Bot is running with polling!"
 
 def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False)
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
+    logger.info("Starting bot in polling mode...")
+    # Send a startup message to admin to confirm bot is alive
+    try:
+        bot.send_message(ADMIN_ID, "✅ Bot started successfully on Railway!")
+    except:
+        pass
     # Start background threads
     threading.Thread(target=schedule_signals, daemon=True).start()
     threading.Thread(target=monitor_signals, daemon=True).start()
     threading.Thread(target=send_promos, daemon=True).start()
-    # Start Flask to keep Railway from timing out
     threading.Thread(target=run_flask, daemon=True).start()
     # Start polling (this will block)
-    logger.info("Starting bot in polling mode...")
     bot.infinity_polling(timeout=60, skip_pending=True)
