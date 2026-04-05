@@ -15,12 +15,12 @@ import numpy as np
 BOT_TOKEN = "8653450456:AAER9w6Gjj5IWkyCs1taa01N-DdMFZqxt3E"
 ADMIN_ID = 6253584826
 
-# Public channel – use NUMERIC ID (provided by you, add -100)
-PUBLIC_CHANNEL_ID = -1003807818260   # from "Public id 1003807818260"
-PUBLIC_CHANNEL_USERNAME = "@tradewithkailashh"  # for sending messages (optional)
+# Public channel – numeric ID (with minus sign)
+PUBLIC_CHANNEL_ID = -1003807818260   # from "1003807818260" add -100
+PUBLIC_CHANNEL_USERNAME = "@tradewithkailashh"  # for links
 
-# VIP channel – numeric ID (must start with -100)
-VIP_CHANNEL_ID = -1003826269063
+# VIP channel – numeric ID (with minus sign)
+VIP_CHANNEL_ID = -1003826269063      # from "1003826269063" add -100
 
 WEBSITE_URL = "https://forexkailash.netlify.app"
 FREE_CHANNEL_LINK = "https://t.me/tradewithkailashh"
@@ -33,6 +33,9 @@ COURSE_URL = "https://forexkailash.netlify.app"
 PUBLIC_SIGNALS_PER_DAY = 7     # 5-7 signals on public channel
 VIP_SIGNALS_PER_DAY = 25       # 20-25 signals on VIP channel
 USER_FREE_SIGNAL_LIMIT = 3     # per user via /free command
+
+# Promotional messages interval (seconds)
+PROMO_INTERVAL = (30 * 60, 45 * 60)  # 30-45 minutes
 
 # ============================================
 # DATABASE SETUP
@@ -358,6 +361,38 @@ Current: {current} | SL: {sl}
 🔴 *Consider closing the trade* to protect capital.
 More signals coming soon.
 """
+
+# ============================================
+# PROMOTIONAL MESSAGES (for public channel)
+# ============================================
+
+PROMO_MESSAGES = [
+    f"⭐ *Why go VIP?* ⭐\n\n✅ 20-25 premium signals daily\n✅ Early entries before the move\n✅ 1-on-1 support\n✅ 89% win rate\n\n💰 Just ₹399/month\n👉 {VIP_CHANNEL_LINK}",
+    f"🚀 *Last week's VIP performance* 🚀\n\n📊 22 signals | 20 TP hits\n📈 Average profit per trade: ₹850\n💰 Total profit: ₹18,700+\n\nDon't miss out → {VIP_CHANNEL_LINK}",
+    f"💎 *VIP members get signals 30 minutes before everyone else.*\n\nThat means better entries and bigger profits.\n\nJoin now: {VIP_CHANNEL_LINK}",
+    f"📢 *Limited slots available!* 📢\n\nOnly 7 VIP spots left this month.\n\n💰 ₹399/month – cancel anytime.\n\n👉 {VIP_CHANNEL_LINK}",
+    f"🏆 *Member testimonial* 🏆\n\n\"I made back my VIP fee in 2 days. Best decision ever!\" – Rajesh K.\n\nJoin Rajesh and 5000+ others → {VIP_CHANNEL_LINK}",
+    f"📊 *Free vs VIP* 📊\n\nFree channel: 5-7 signals/day\nVIP channel: 20-25 signals/day + early entries + live support\n\nUpgrade now: {VIP_CHANNEL_LINK}",
+    f"🔥 *Today's VIP profit update* 🔥\n\nGold BUY → TP2 hit (+₹1200)\nBTC SELL → TP1 hit (+₹800)\nEUR/USD BUY → TP2 hit (+₹500)\n\nTotal: +₹2500 in one day!\n\n👉 {VIP_CHANNEL_LINK}",
+    f"💡 *Trading tip* 💡\n\nThe difference between profitable traders and losers? Early entries and risk management.\n\nVIP gives you both. Join: {VIP_CHANNEL_LINK}",
+    f"🎁 *Special offer* 🎁\n\nFirst 10 new VIP members this week get a free 1-on-1 strategy session.\n\nUse code: KAILASH10\n\n👉 {VIP_CHANNEL_LINK}",
+    f"📈 *89% win rate is not luck – it's our system.*\n\nVIP members trust our analysis daily.\n\nStart earning today: {VIP_CHANNEL_LINK}",
+]
+
+def get_random_promo():
+    return random.choice(PROMO_MESSAGES)
+
+def promo_sender():
+    """Sends a promotional message to public channel every 30-45 minutes"""
+    while True:
+        interval = random.randint(PROMO_INTERVAL[0], PROMO_INTERVAL[1])
+        time.sleep(interval)
+        try:
+            promo_text = get_random_promo()
+            bot.send_message(PUBLIC_CHANNEL_ID, promo_text, parse_mode='Markdown')
+            print(f"Promo sent at {datetime.datetime.now()}")
+        except Exception as e:
+            print(f"Promo error: {e}")
 
 # ============================================
 # PRICE MONITOR (every 60 sec)
@@ -760,9 +795,21 @@ def help_command(message):
 # ============================================
 
 if __name__ == "__main__":
+    # FIRST: Delete any existing webhook (fixes 409 error)
+    try:
+        bot.delete_webhook()
+        print("Webhook deleted successfully.")
+    except Exception as e:
+        print(f"Webhook deletion error: {e}")
+
     print("🤖 Forex Bot Started")
     print(f"Public channel ID: {PUBLIC_CHANNEL_ID}")
     print(f"VIP channel ID: {VIP_CHANNEL_ID}")
+
+    # Start background threads
     threading.Thread(target=signal_scanner, daemon=True).start()
     threading.Thread(target=price_monitor, daemon=True).start()
+    threading.Thread(target=promo_sender, daemon=True).start()   # NEW promo thread
+
+    # Start polling (no webhook)
     bot.infinity_polling()
