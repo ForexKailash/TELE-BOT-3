@@ -5,7 +5,8 @@ import os
 import random
 import threading
 import time
-import yfinance as yf
+import requests
+import json
 import numpy as np
 
 # ============================================
@@ -13,16 +14,13 @@ import numpy as np
 # ============================================
 
 BOT_TOKEN = "8653450456:AAER9w6Gjj5IWkyCs1taa01N-DdMFZqxt3E"
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is not set!")
-
 ADMIN_ID = 6253584826
 CHANNEL_ID = '@tradewithkailashh'
 WEBSITE_URL = 'https://forexkailash.netlify.app'
 FREE_CHANNEL = 'https://t.me/tradewithkailashh'
 VIP_CHANNEL = 'https://t.me/+Snj0BVAwjDo3NTA1'
 UPI_ID = 'kailashbhardwaj66-2@okicici'
-CONTACT_USERNAME = '@Yungshang1'
+CONTACT_USERNAME = '@ForexKailash'
 COURSE_URL = 'https://forexkailash.netlify.app'
 
 # VIP Channel Numeric ID
@@ -31,6 +29,13 @@ VIP_CHANNEL_ID = -1003826269063
 # Daily Signal Limits
 FREE_SIGNAL_LIMIT_DAILY = 7      # 5-7 trades per day on free channel
 VIP_SIGNAL_LIMIT_DAILY = 22      # 20-25 trades per day on VIP channel
+
+# ============================================
+# FCS API CONFIGURATION (Your API Keys)
+# ============================================
+FCS_ACCESS_KEY = "wvYZfov5RC2SlDpzaHautvMzowmYQcc"
+FCS_PUBLIC_KEY = "Gj3DoeAgI1gRNo2LMuHGfccTM"
+FCS_BASE_URL = "https://api-v4.fcsapi.com"
 
 # ============================================
 # DATABASE SETUP
@@ -70,7 +75,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS daily_vip_counter
 c.execute('''CREATE TABLE IF NOT EXISTS active_trades
 (symbol TEXT PRIMARY KEY, direction TEXT, signal_id INTEGER, sent_time TEXT, timeframe TEXT)''')
 
-# Add missing columns if they don't exist
+# Add missing columns
 for col in [
     "ALTER TABLE channel_signals ADD COLUMN message_id INTEGER DEFAULT NULL",
     "ALTER TABLE channel_signals ADD COLUMN ticker TEXT",
@@ -86,15 +91,6 @@ for col in [
         pass
 
 conn.commit()
-
-def get_setting(key, default=None):
-    c.execute("SELECT value FROM bot_settings WHERE key=?", (key,))
-    row = c.fetchone()
-    return row[0] if row else default
-
-def set_setting(key, value):
-    c.execute("INSERT INTO bot_settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=?", (key, value, value))
-    conn.commit()
 
 # ============================================
 # DAILY COUNTER FUNCTIONS
@@ -149,32 +145,87 @@ def increment_user_signal_count(user_id):
 
 def signals_remaining(user_id):
     used = get_signal_count_today(user_id)
-    return max(0, 3 - used)  # 3 free signals per user
+    return max(0, 3 - used)
 
 # ============================================
-# TECHNICAL INDICATORS (Real Market Analysis)
+# SYMBOLS CONFIGURATION
 # ============================================
 
 SYMBOLS = [
-    {"name": "XAU/USD", "ticker": "GC=F", "emoji": "🥇", "decimals": 2,
+    {"name": "XAU/USD", "fcs_symbol": "XAU/USD", "emoji": "🥇", "decimals": 2,
      "tp1_pct": 0.004, "tp2_pct": 0.008, "sl_pct": 0.003, "spread_pct": 0.001},
-    {"name": "BTC/USD", "ticker": "BTC-USD", "emoji": "₿", "decimals": 0,
+    {"name": "BTC/USD", "fcs_symbol": "BTC/USD", "emoji": "₿", "decimals": 0,
      "tp1_pct": 0.006, "tp2_pct": 0.012, "sl_pct": 0.004, "spread_pct": 0.001},
-    {"name": "ETH/USD", "ticker": "ETH-USD", "emoji": "💎", "decimals": 1,
+    {"name": "ETH/USD", "fcs_symbol": "ETH/USD", "emoji": "💎", "decimals": 1,
      "tp1_pct": 0.007, "tp2_pct": 0.014, "sl_pct": 0.005, "spread_pct": 0.001},
-    {"name": "USOIL", "ticker": "CL=F", "emoji": "🛢️", "decimals": 2,
+    {"name": "USOIL", "fcs_symbol": "WTI/USD", "emoji": "🛢️", "decimals": 2,
      "tp1_pct": 0.005, "tp2_pct": 0.010, "sl_pct": 0.003, "spread_pct": 0.001},
-    {"name": "AUD/USD", "ticker": "AUDUSD=X", "emoji": "🦘", "decimals": 5,
+    {"name": "AUD/USD", "fcs_symbol": "AUD/USD", "emoji": "🦘", "decimals": 5,
      "tp1_pct": 0.003, "tp2_pct": 0.006, "sl_pct": 0.002, "spread_pct": 0.0003},
-    {"name": "EUR/USD", "ticker": "EURUSD=X", "emoji": "💶", "decimals": 5,
+    {"name": "EUR/USD", "fcs_symbol": "EUR/USD", "emoji": "💶", "decimals": 5,
      "tp1_pct": 0.003, "tp2_pct": 0.006, "sl_pct": 0.002, "spread_pct": 0.0003},
-    {"name": "GBP/USD", "ticker": "GBPUSD=X", "emoji": "💷", "decimals": 5,
+    {"name": "GBP/USD", "fcs_symbol": "GBP/USD", "emoji": "💷", "decimals": 5,
      "tp1_pct": 0.003, "tp2_pct": 0.006, "sl_pct": 0.002, "spread_pct": 0.0003},
-    {"name": "USD/JPY", "ticker": "JPY=X", "emoji": "🇯🇵", "decimals": 3,
+    {"name": "USD/JPY", "fcs_symbol": "USD/JPY", "emoji": "🇯🇵", "decimals": 3,
      "tp1_pct": 0.003, "tp2_pct": 0.005, "sl_pct": 0.002, "spread_pct": 0.0003},
-    {"name": "NAS100", "ticker": "NQ=F", "emoji": "📈", "decimals": 0,
+    {"name": "NAS100", "fcs_symbol": "NAS100", "emoji": "📈", "decimals": 0,
      "tp1_pct": 0.004, "tp2_pct": 0.008, "sl_pct": 0.003, "spread_pct": 0.001},
 ]
+
+# ============================================
+# FCS API FUNCTIONS
+# ============================================
+
+def get_live_price_fcs(symbol):
+    """Get current price from FCS API"""
+    try:
+        url = f"{FCS_BASE_URL}/forex/single"
+        params = {
+            "access_key": FCS_ACCESS_KEY,
+            "symbol": symbol
+        }
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        
+        if data.get('status') and data.get('response'):
+            return float(data['response']['c'])
+        return None
+    except Exception as e:
+        print(f"FCS price error for {symbol}: {e}")
+        return None
+
+def get_historical_fcs(symbol, period="1h", limit=50):
+    """Get historical data for indicators"""
+    try:
+        url = f"{FCS_BASE_URL}/forex/history"
+        params = {
+            "access_key": FCS_ACCESS_KEY,
+            "symbol": symbol,
+            "period": period,
+            "limit": limit
+        }
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        
+        if data.get('status') and data.get('response'):
+            prices = []
+            if isinstance(data['response'], dict):
+                for timestamp, values in data['response'].items():
+                    if isinstance(values, dict) and 'c' in values:
+                        prices.append(float(values['c']))
+            elif isinstance(data['response'], list):
+                for item in data['response']:
+                    if 'c' in item:
+                        prices.append(float(item['c']))
+            return prices
+        return []
+    except Exception as e:
+        print(f"FCS historical error for {symbol}: {e}")
+        return []
 
 def calculate_rsi(prices, period=14):
     """Calculate RSI from price list"""
@@ -190,50 +241,29 @@ def calculate_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """Calculate MACD line, signal line, and histogram"""
-    if len(prices) < slow + signal:
-        return 0, 0, 0
-    exp1 = np.mean(prices[-fast:])
-    exp2 = np.mean(prices[-slow:])
-    macd_line = exp1 - exp2
-    return macd_line, 0, 0
-
 def get_signal_with_reason(symbol, timeframe="1h"):
     """
-    Returns (direction, confidence, current_price, reason)
-    Supports multiple timeframes for VIP signals
+    Returns (direction, confidence, current_price, reason, timeframe)
     """
     try:
-        ticker = yf.Ticker(symbol["ticker"])
+        fcs_symbol = symbol["fcs_symbol"]
         
-        # Different intervals based on timeframe
-        if timeframe == "5m":
-            hist = ticker.history(period="1d", interval="5m")
-            data_points = 50
-        elif timeframe == "15m":
-            hist = ticker.history(period="2d", interval="15m")
-            data_points = 40
-        elif timeframe == "1h":
-            hist = ticker.history(period="3d", interval="1h")
-            data_points = 30
-        else:  # Default 1h
-            hist = ticker.history(period="3d", interval="1h")
-            data_points = 30
+        # Map timeframe to FCS period
+        period_map = {"5m": "5min", "15m": "15min", "1h": "1h"}
+        period = period_map.get(timeframe, "1h")
         
-        if hist.empty or len(hist) < data_points:
+        # Get historical data
+        closes = get_historical_fcs(fcs_symbol, period, 50)
+        if len(closes) < 30:
             return None
         
-        closes = hist["Close"].tolist()
+        # Get current price
+        current_price = get_live_price_fcs(fcs_symbol)
+        if current_price is None or current_price <= 0:
+            return None
+        
+        # Calculate indicators
         rsi = calculate_rsi(closes)
-        
-        # Get current price from 1-min data
-        curr_data = ticker.history(period="1d", interval="1m")
-        if curr_data.empty:
-            return None
-        current_price = float(curr_data["Close"].iloc[-1])
-        
-        # Calculate moving averages
         sma20 = np.mean(closes[-20:])
         sma50 = np.mean(closes[-50:]) if len(closes) >= 50 else sma20
         ema9 = np.mean(closes[-9:])
@@ -243,10 +273,6 @@ def get_signal_with_reason(symbol, timeframe="1h"):
         prev_close = closes[-2] if len(closes) >= 2 else current_price
         price_momentum = "up" if current_price > prev_close else "down"
         
-        # ============================================
-        # SIGNAL GENERATION WITH REASONS
-        # ============================================
-        
         # STRONG BUY SIGNALS
         if rsi < 35 and current_price > sma20:
             confidence = 85 + int((35 - rsi) / 2)
@@ -255,38 +281,38 @@ def get_signal_with_reason(symbol, timeframe="1h"):
         
         elif rsi < 30:
             confidence = 90
-            reason = f"🔍 *Technical Reason:* RSI is extremely oversold at {rsi:.1f} (below 30). Historical data shows 85%+ probability of bounce back from these levels. Smart money accumulation detected."
+            reason = f"🔍 *Technical Reason:* RSI is extremely oversold at {rsi:.1f} (below 30). Historical data shows 85%+ probability of bounce back from these levels."
             return ("BUY", confidence, current_price, reason, timeframe)
         
         elif current_price > ema9 and ema9 > ema21 and rsi > 50:
             confidence = 80
-            reason = f"🔍 *Technical Reason:* Golden crossover detected! EMA9 ({ema9:.2f}) is above EMA21 ({ema21:.2f}) forming bullish trend. RSI at {rsi:.1f} confirms momentum. Uptrend likely to continue."
+            reason = f"🔍 *Technical Reason:* Golden crossover detected! EMA9 ({ema9:.2f}) is above EMA21 ({ema21:.2f}) forming bullish trend. RSI at {rsi:.1f} confirms momentum."
             return ("BUY", confidence, current_price, reason, timeframe)
         
         elif price_momentum == "up" and current_price > sma20 and rsi < 60:
             confidence = 75
-            reason = f"🔍 *Technical Reason:* Bullish price action with +ve momentum. Price broke above 20 SMA ({sma20:.2f}) with increasing volume. RSI at {rsi:.1f} shows room for upside."
+            reason = f"🔍 *Technical Reason:* Bullish price action with positive momentum. Price broke above 20 SMA ({sma20:.2f}). RSI at {rsi:.1f} shows room for upside."
             return ("BUY", confidence, current_price, reason, timeframe)
         
         # STRONG SELL SIGNALS
         elif rsi > 65 and current_price < sma20:
             confidence = 85 + int((rsi - 65) / 2)
-            reason = f"🔍 *Technical Reason:* RSI is {rsi:.1f} (overbought above 65) + Price trading below 20-period SMA ({sma20:.2f}). This indicates bearish reversal potential with profit booking expected."
+            reason = f"🔍 *Technical Reason:* RSI is {rsi:.1f} (overbought above 65) + Price trading below 20-period SMA ({sma20:.2f}). Bearish reversal expected."
             return ("SELL", min(95, confidence), current_price, reason, timeframe)
         
         elif rsi > 70:
             confidence = 90
-            reason = f"🔍 *Technical Reason:* RSI is extremely overbought at {rsi:.1f} (above 70). Market correction highly probable. Smart money taking profits at these levels."
+            reason = f"🔍 *Technical Reason:* RSI is extremely overbought at {rsi:.1f} (above 70). Market correction highly probable."
             return ("SELL", confidence, current_price, reason, timeframe)
         
         elif current_price < ema9 and ema9 < ema21 and rsi < 50:
             confidence = 80
-            reason = f"🔍 *Technical Reason:* Death crossover detected! EMA9 ({ema9:.2f}) is below EMA21 ({ema21:.2f}) forming bearish trend. RSI at {rsi:.1f} confirms downward momentum. Downtrend likely to continue."
+            reason = f"🔍 *Technical Reason:* Death crossover detected! EMA9 ({ema9:.2f}) is below EMA21 ({ema21:.2f}) forming bearish trend."
             return ("SELL", confidence, current_price, reason, timeframe)
         
         elif price_momentum == "down" and current_price < sma20 and rsi > 40:
             confidence = 75
-            reason = f"🔍 *Technical Reason:* Bearish price action with negative momentum. Price broke below 20 SMA ({sma20:.2f}) with selling pressure. RSI at {rsi:.1f} shows room for downside."
+            reason = f"🔍 *Technical Reason:* Bearish price action with negative momentum. Price broke below 20 SMA ({sma20:.2f})."
             return ("SELL", confidence, current_price, reason, timeframe)
         
         return None
@@ -318,7 +344,7 @@ def generate_signal_data(symbol, direction, current_price, confidence, reason, t
     
     return {
         "symbol": symbol["name"],
-        "ticker": symbol["ticker"],
+        "ticker": symbol["fcs_symbol"],
         "emoji": symbol["emoji"],
         "direction": direction,
         "entry_low": entry_low,
@@ -331,7 +357,6 @@ def generate_signal_data(symbol, direction, current_price, confidence, reason, t
         "confidence": confidence,
         "reason": reason,
         "timeframe": timeframe,
-        "dir_emoji": "🟢" if direction == "BUY" else "🔴",
     }
 
 def save_signal_to_db(signal, channel_type, message_id):
@@ -365,6 +390,25 @@ def remove_active_trade(symbol):
     c.execute("DELETE FROM active_trades WHERE symbol=?", (symbol,))
     conn.commit()
 
+def get_live_price(ticker):
+    """Get current live price from FCS API"""
+    return get_live_price_fcs(ticker)
+
+def calculate_profit(direction, entry, hit_price, decimals):
+    """Calculate profit in pips/points"""
+    if decimals == 5:
+        multiplier = 10000
+        unit = "pips"
+    elif decimals == 0:
+        multiplier = 1
+        unit = "$"
+    else:
+        multiplier = 100 if decimals == 2 else 1
+        unit = "pts" if decimals == 2 else "$"
+    
+    profit = round(abs(hit_price - entry) * multiplier, 1)
+    return profit, unit
+
 def send_signal_to_channels(signal, is_vip_only=False):
     """Send signal to public and VIP channels with daily limits"""
     now = datetime.datetime.now()
@@ -387,7 +431,7 @@ def send_signal_to_channels(signal, is_vip_only=False):
 ⚠️ *Risk:* Use 1-2% risk per trade.
 """
     
-    # Send to Public Channel (if not VIP only and under limit)
+    # Send to Public Channel
     public_msg_id = None
     if not is_vip_only:
         public_count = get_daily_public_count()
@@ -396,14 +440,13 @@ def send_signal_to_channels(signal, is_vip_only=False):
                 msg = bot.send_message(CHANNEL_ID, signal_text, parse_mode='Markdown')
                 public_msg_id = msg.message_id
                 increment_daily_public_count()
-                print(f"✅ Public signal sent: {signal['direction']} {signal['symbol']} ({public_count+1}/{FREE_SIGNAL_LIMIT_DAILY})")
+                print(f"✅ Public signal sent: {signal['direction']} {signal['symbol']}")
             except Exception as e:
-                print(f"Failed to send to public channel: {e}")
+                print(f"Public send error: {e}")
     
-    # Send to VIP Channel (always if under limit)
+    # Send to VIP Channel
     vip_count = get_daily_vip_count()
     vip_msg_id = None
-    
     if vip_count < VIP_SIGNAL_LIMIT_DAILY:
         vip_text = f"""
 ⭐ *VIP PREMIUM SIGNAL* ⭐
@@ -415,9 +458,9 @@ def send_signal_to_channels(signal, is_vip_only=False):
             msg = bot.send_message(VIP_CHANNEL_ID, vip_text, parse_mode='Markdown')
             vip_msg_id = msg.message_id
             increment_daily_vip_count()
-            print(f"✅ VIP signal sent: {signal['direction']} {signal['symbol']} ({vip_count+1}/{VIP_SIGNAL_LIMIT_DAILY})")
+            print(f"✅ VIP signal sent: {signal['direction']} {signal['symbol']}")
         except Exception as e:
-            print(f"Failed to send to VIP channel: {e}")
+            print(f"VIP send error: {e}")
     
     # Save to database
     if public_msg_id or vip_msg_id:
@@ -428,228 +471,88 @@ def send_signal_to_channels(signal, is_vip_only=False):
 # PRICE MONITOR (every 60 seconds)
 # ============================================
 
-def get_live_price(ticker):
-    """Get current live price"""
-    try:
-        ticker_obj = yf.Ticker(ticker)
-        hist = ticker_obj.history(period="1d", interval="1m")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
-    except Exception as e:
-        print(f"Price fetch error {ticker}: {e}")
-    return None
-
-def calculate_profit(direction, entry, hit_price, decimals):
-    """Calculate profit in pips/points"""
-    if decimals == 5:
-        multiplier = 10000
-        unit = "pips"
-    elif decimals == 0:
-        multiplier = 1
-        unit = "$"
-    else:
-        multiplier = 100 if decimals == 2 else 1
-        unit = "pts" if decimals == 2 else "$"
-    
-    profit = round(abs(hit_price - entry) * multiplier, 1)
-    return profit, unit
-
-def get_hype_reason(symbol, direction, hit_level):
-    """Generate hype message with reason why TP hit"""
-    reasons = [
-        f"Strong {direction} momentum continued as predicted!",
-        f"Institutional buying/selling pressure drove price to target.",
-        f"Technical breakout confirmed our analysis!",
-        f"Market followed our predicted path perfectly.",
-        f"Volume spike confirmed the directional move."
-    ]
-    return random.choice(reasons)
-
 def monitor_prices():
     """Check pending signals every 60 seconds for TP/SL hits"""
     print("🔄 Price monitor started - checking every 60 seconds")
     
     while True:
         try:
-            # Get all pending signals
             c.execute("""SELECT id, symbol, direction, entry, tp1, tp2, sl, decimals, 
-                        message_id, ticker, result, channel_type, signal_reason
+                        message_id, ticker, result
                         FROM channel_signals
                         WHERE result='pending' AND message_id IS NOT NULL""")
             pending = c.fetchall()
             
             for row in pending:
-                sig_id, symbol, direction, entry, tp1, tp2, sl, decimals, msg_id, ticker, result, ch_type, reason = row
-                
-                if not ticker:
-                    continue
+                sig_id, symbol, direction, entry, tp1, tp2, sl, decimals, msg_id, ticker, result = row
                 
                 current = get_live_price(ticker)
                 if current is None:
                     continue
                 
-                # Check TP1
-                if direction == "BUY" and current >= tp1:
-                    profit, unit = calculate_profit(direction, entry, tp1, decimals)
-                    hype_reason = get_hype_reason(symbol, direction, "TP1")
-                    hype_msg = f"""
-🎯🔥 *TARGET HIT!* 🔥🎯
-
-{symbol} {direction} → *TP1 ✅ REACHED!*
-
-+{profit} {unit} profit!
-
-📊 *Why TP hit?* {hype_reason}
-
-💎 *VIP got this entry early!*
-🚀 Join VIP: {VIP_CHANNEL}
-"""
-                    try:
-                        bot.send_message(CHANNEL_ID, hype_msg, parse_mode='Markdown')
-                        bot.send_message(VIP_CHANNEL_ID, hype_msg, parse_mode='Markdown')
+                # BUY side
+                if direction == "BUY":
+                    if current >= tp1:
+                        profit, unit = calculate_profit(direction, entry, tp1, decimals)
+                        hype = f"🎯 TP1 HIT! {symbol} {direction}\n+{profit} {unit} profit!\nVIP: {VIP_CHANNEL}"
+                        bot.send_message(CHANNEL_ID, hype, parse_mode='Markdown')
+                        bot.send_message(VIP_CHANNEL_ID, hype, parse_mode='Markdown')
                         update_signal_result(sig_id, "tp1_hit")
                         remove_active_trade(symbol)
-                        print(f"🎯 TP1 Hit: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"Hype message error: {e}")
-                
-                # Check TP2
-                elif direction == "BUY" and current >= tp2:
-                    profit, unit = calculate_profit(direction, entry, tp2, decimals)
-                    hype_reason = get_hype_reason(symbol, direction, "TP2")
-                    hype_msg = f"""
-🏆💰 *FULL PROFIT TARGET!* 💰🏆
-
-{symbol} {direction} → *TP2 ✅ REACHED!*
-
-+{profit} {unit} total profit!
-
-📊 *Why full profit hit?* {hype_reason}
-
-🎉 Congratulations VIP members!
-🔗 {VIP_CHANNEL}
-"""
-                    try:
-                        bot.send_message(CHANNEL_ID, hype_msg, parse_mode='Markdown')
-                        bot.send_message(VIP_CHANNEL_ID, hype_msg, parse_mode='Markdown')
+                    elif current >= tp2:
+                        profit, unit = calculate_profit(direction, entry, tp2, decimals)
+                        hype = f"🏆 TP2 HIT! {symbol} {direction}\n+{profit} {unit} profit!\nVIP: {VIP_CHANNEL}"
+                        bot.send_message(CHANNEL_ID, hype, parse_mode='Markdown')
+                        bot.send_message(VIP_CHANNEL_ID, hype, parse_mode='Markdown')
                         update_signal_result(sig_id, "tp2_hit")
                         remove_active_trade(symbol)
-                        print(f"🏆 TP2 Hit: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"Hype message error: {e}")
-                
-                # Check SL - DELETE from public channel
-                elif direction == "BUY" and current <= sl:
-                    try:
-                        # Delete from public channel
-                        bot.delete_message(CHANNEL_ID, msg_id)
-                        # Inform VIP channel
-                        warn_msg = f"""
-⚠️ *SL HIT - Trade Closed* ⚠️
-
-{symbol} {direction}
-Loss: {abs(round((entry - sl) * (10000 if decimals==5 else 100 if decimals==2 else 1), 1))} {unit if 'unit' in dir() else 'pts'}
-
-📊 *Reason:* Market reversed due to news/阻力.
-
-🔴 Signal removed from public channel.
-💎 VIP members - next signal coming soon!
-"""
-                        bot.send_message(VIP_CHANNEL_ID, warn_msg, parse_mode='Markdown')
+                    elif current <= sl:
+                        try:
+                            bot.delete_message(CHANNEL_ID, msg_id)
+                        except:
+                            pass
+                        warn = f"⚠️ SL HIT: {symbol} {direction}\nSignal removed from public channel."
+                        bot.send_message(VIP_CHANNEL_ID, warn, parse_mode='Markdown')
                         update_signal_result(sig_id, "sl_hit")
                         remove_active_trade(symbol)
-                        print(f"🔴 SL Hit - Deleted from public: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"SL delete error: {e}")
                 
-                # SELL side checks
-                elif direction == "SELL" and current <= tp1:
-                    profit, unit = calculate_profit(direction, entry, tp1, decimals)
-                    hype_reason = get_hype_reason(symbol, direction, "TP1")
-                    hype_msg = f"""
-🎯🔥 *TARGET HIT!* 🔥🎯
-
-{symbol} {direction} → *TP1 ✅ REACHED!*
-
-+{profit} {unit} profit!
-
-📊 *Why TP hit?* {hype_reason}
-
-💎 *VIP got this entry early!*
-🚀 Join VIP: {VIP_CHANNEL}
-"""
-                    try:
-                        bot.send_message(CHANNEL_ID, hype_msg, parse_mode='Markdown')
-                        bot.send_message(VIP_CHANNEL_ID, hype_msg, parse_mode='Markdown')
+                # SELL side
+                elif direction == "SELL":
+                    if current <= tp1:
+                        profit, unit = calculate_profit(direction, entry, tp1, decimals)
+                        hype = f"🎯 TP1 HIT! {symbol} {direction}\n+{profit} {unit} profit!\nVIP: {VIP_CHANNEL}"
+                        bot.send_message(CHANNEL_ID, hype, parse_mode='Markdown')
+                        bot.send_message(VIP_CHANNEL_ID, hype, parse_mode='Markdown')
                         update_signal_result(sig_id, "tp1_hit")
                         remove_active_trade(symbol)
-                        print(f"🎯 TP1 Hit: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"Hype message error: {e}")
-                
-                elif direction == "SELL" and current <= tp2:
-                    profit, unit = calculate_profit(direction, entry, tp2, decimals)
-                    hype_reason = get_hype_reason(symbol, direction, "TP2")
-                    hype_msg = f"""
-🏆💰 *FULL PROFIT TARGET!* 💰🏆
-
-{symbol} {direction} → *TP2 ✅ REACHED!*
-
-+{profit} {unit} total profit!
-
-📊 *Why full profit hit?* {hype_reason}
-
-🎉 Congratulations VIP members!
-🔗 {VIP_CHANNEL}
-"""
-                    try:
-                        bot.send_message(CHANNEL_ID, hype_msg, parse_mode='Markdown')
-                        bot.send_message(VIP_CHANNEL_ID, hype_msg, parse_mode='Markdown')
+                    elif current <= tp2:
+                        profit, unit = calculate_profit(direction, entry, tp2, decimals)
+                        hype = f"🏆 TP2 HIT! {symbol} {direction}\n+{profit} {unit} profit!\nVIP: {VIP_CHANNEL}"
+                        bot.send_message(CHANNEL_ID, hype, parse_mode='Markdown')
+                        bot.send_message(VIP_CHANNEL_ID, hype, parse_mode='Markdown')
                         update_signal_result(sig_id, "tp2_hit")
                         remove_active_trade(symbol)
-                        print(f"🏆 TP2 Hit: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"Hype message error: {e}")
-                
-                elif direction == "SELL" and current >= sl:
-                    try:
-                        bot.delete_message(CHANNEL_ID, msg_id)
-                        warn_msg = f"""
-⚠️ *SL HIT - Trade Closed* ⚠️
-
-{symbol} {direction}
-Loss: {abs(round((sl - entry) * (10000 if decimals==5 else 100 if decimals==2 else 1), 1))} {unit if 'unit' in dir() else 'pts'}
-
-📊 *Reason:* Market reversed due to unexpected news.
-
-🔴 Signal removed from public channel.
-💎 VIP members - next signal coming soon!
-"""
-                        bot.send_message(VIP_CHANNEL_ID, warn_msg, parse_mode='Markdown')
+                    elif current >= sl:
+                        try:
+                            bot.delete_message(CHANNEL_ID, msg_id)
+                        except:
+                            pass
+                        warn = f"⚠️ SL HIT: {symbol} {direction}\nSignal removed from public channel."
+                        bot.send_message(VIP_CHANNEL_ID, warn, parse_mode='Markdown')
                         update_signal_result(sig_id, "sl_hit")
                         remove_active_trade(symbol)
-                        print(f"🔴 SL Hit - Deleted from public: {symbol} {direction}")
-                    except Exception as e:
-                        print(f"SL delete error: {e}")
                         
         except Exception as e:
-            print(f"Price monitor error: {e}")
-        
-        time.sleep(60)  # Check every minute
+            print(f"Monitor error: {e}")
+        time.sleep(60)
 
 # ============================================
 # SIGNAL SCANNER (every 60 seconds)
 # ============================================
 
 def signal_scanner():
-    """
-    Scan all symbols every 60 seconds for trading opportunities
-    VIP gets multiple timeframes (5m, 15m, 1h) = 20-25 trades/day
-    Free gets only 1h timeframe = 5-7 trades/day
-    """
+    """Scan all symbols every 60 seconds for trading opportunities"""
     print("🔄 Signal scanner started - checking every 60 seconds")
-    
-    # Track last scan time for VIP timeframes to avoid duplicate
     last_scan = {"5m": 0, "15m": 0, "1h": 0}
     
     while True:
@@ -657,52 +560,42 @@ def signal_scanner():
             current_time = time.time()
             
             for symbol in SYMBOLS:
-                # Skip if already in active trade
                 if is_active_trade(symbol["name"]):
                     continue
                 
-                # ============================================
-                # FREE CHANNEL SIGNALS (1h timeframe only)
-                # ============================================
+                # Free channel signals (1h only)
                 if get_daily_public_count() < FREE_SIGNAL_LIMIT_DAILY:
                     result = get_signal_with_reason(symbol, "1h")
                     if result:
                         direction, confidence, price, reason, tf = result
                         signal = generate_signal_data(symbol, direction, price, confidence, reason, tf)
                         send_signal_to_channels(signal, is_vip_only=False)
-                        time.sleep(3)  # Delay between signals
+                        time.sleep(3)
                 
-                # ============================================
-                # VIP CHANNEL SIGNALS (Multiple timeframes)
-                # ============================================
+                # VIP signals (multiple timeframes)
                 if get_daily_vip_count() < VIP_SIGNAL_LIMIT_DAILY:
-                    # VIP gets signals from 3 different timeframes
                     timeframes = ["5m", "15m", "1h"]
-                    
                     for tf in timeframes:
-                        # Avoid scanning same timeframe too frequently
-                        if tf == "5m" and current_time - last_scan["5m"] < 300:  # 5 min
+                        if tf == "5m" and current_time - last_scan["5m"] < 300:
                             continue
-                        elif tf == "15m" and current_time - last_scan["15m"] < 900:  # 15 min
+                        elif tf == "15m" and current_time - last_scan["15m"] < 900:
                             continue
-                        elif tf == "1h" and current_time - last_scan["1h"] < 3600:  # 1 hour
+                        elif tf == "1h" and current_time - last_scan["1h"] < 3600:
                             continue
                         
                         result = get_signal_with_reason(symbol, tf)
                         if result:
                             direction, confidence, price, reason, timeframe = result
                             signal = generate_signal_data(symbol, direction, price, confidence, reason, timeframe)
-                            send_signal_to_channels(signal, is_vip_only=False)  # VIP signals also go to VIP channel
+                            send_signal_to_channels(signal, is_vip_only=False)
                             last_scan[tf] = current_time
-                            time.sleep(5)  # Delay between signals
-                            break  # One signal per symbol per scan
-                        
+                            time.sleep(5)
+                            break
                         last_scan[tf] = current_time
-                    
+                        
         except Exception as e:
-            print(f"Signal scanner error: {e}")
-        
-        time.sleep(60)  # Scan every minute
+            print(f"Scanner error: {e}")
+        time.sleep(60)
 
 # ============================================
 # TELEGRAM BOT COMMANDS
@@ -731,7 +624,6 @@ India's Most Trusted Forex Signals Provider
 ✅ FREE Signals - {FREE_SIGNAL_LIMIT_DAILY} calls daily
 ⭐ VIP Channel - ₹399/month ({VIP_SIGNAL_LIMIT_DAILY} signals/day)
 🔄 Real Market Analysis (85%+ Accuracy)
-📈 5000+ Traders Trust Us
 
 🌐 *Website:* {WEBSITE_URL}
 📢 *Free Channel:* {FREE_CHANNEL}
@@ -741,7 +633,7 @@ India's Most Trusted Forex Signals Provider
 
 @bot.message_handler(commands=['register'])
 def register_cmd(message):
-    msg = bot.reply_to(message, "📝 *Send your details:*\n\n`Name, Email, Phone`\n\nExample: `Rajesh, rajesh@gmail.com, 9876543210`", parse_mode='Markdown')
+    msg = bot.reply_to(message, "📝 *Send:* `Name, Email, Phone`\nExample: `Rajesh, rajesh@gmail.com, 9876543210`", parse_mode='Markdown')
     bot.register_next_step_handler(msg, save_user)
 
 def save_user(message):
@@ -752,9 +644,9 @@ def save_user(message):
         name = data[0].strip()
         email = data[1].strip()
         phone = data[2].strip()
-        c.execute("INSERT OR REPLACE INTO users (user_id, name, email, phone, register_date, is_vip) VALUES (?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT OR REPLACE INTO users (user_id, name, email, phone, register_date, is_vip) VALUES (?,?,?,?,?,?)",
                   (user_id, name, email, phone, str(datetime.datetime.now()), 0))
-        c.execute("INSERT INTO registrations (user_id, name, email, phone, date) VALUES (?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO registrations (user_id, name, email, phone, date) VALUES (?,?,?,?,?)",
                   (user_id, name, email, phone, str(datetime.datetime.now())))
         conn.commit()
         admin_msg = f"""🔔 *NEW REGISTRATION* 🔔
@@ -765,51 +657,24 @@ def save_user(message):
 👤 *Username:* @{username}
 🕐 *Time:* {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"""
         bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
-        reply_msg = f"""✅ *Welcome {name}!* ✅
-
-Your registration is complete!
-
-📊 *What you get:*
-• {FREE_SIGNAL_LIMIT_DAILY} free signals daily
-• Real market analysis with reasons
-• Risk management tips
-
-👇 *Use buttons below:*"""
-        bot.reply_to(message, reply_msg, parse_mode='Markdown', reply_markup=main_keyboard())
+        bot.reply_to(message, f"✅ Welcome {name}! Registration complete.", parse_mode='Markdown', reply_markup=main_keyboard())
     except Exception as e:
-        bot.reply_to(message, "❌ *Invalid Format!*\n\nSend: `Name, Email, Phone`\nExample: `Rajesh, rajesh@gmail.com, 9876543210`", parse_mode='Markdown')
+        bot.reply_to(message, "❌ Invalid format! Send: `Name, Email, Phone`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['free'])
 def free_signal(message):
     user_id = message.from_user.id
     remaining = signals_remaining(user_id)
-    
     if remaining <= 0:
-        block_msg = f"""🚫 *Free Signal Limit Reached!* 🚫
-
-You have used all *3 free signals*.
-
-📢 *Join Free Channel for more:* {FREE_CHANNEL}
-
-⭐ *Want VIP Signals?* {VIP_SIGNAL_LIMIT_DAILY} premium signals daily for just ₹399/month
-👉 /vip"""
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        keyboard.add(
-            telebot.types.InlineKeyboardButton("📢 Join Free Channel", url=FREE_CHANNEL),
-            telebot.types.InlineKeyboardButton("⭐ Get VIP Access", callback_data="vip")
-        )
-        bot.reply_to(message, block_msg, parse_mode='Markdown', reply_markup=keyboard)
+        bot.reply_to(message, f"🚫 Free limit reached! Join: {FREE_CHANNEL}", parse_mode='Markdown')
         return
     
-    # Get a quick signal for user
     for symbol in SYMBOLS:
         result = get_signal_with_reason(symbol, "1h")
         if result:
             direction, confidence, price, reason, tf = result
             signal = generate_signal_data(symbol, direction, price, confidence, reason, tf)
-            
-            signal_text = f"""
-📊 *FREE SIGNAL* 📊
+            text = f"""📊 *FREE SIGNAL* 📊
 {signal['emoji']} *{signal['direction']} {signal['symbol']}*
 
 📌 Entry: `{signal['entry_low']} - {signal['entry_high']}`
@@ -817,19 +682,13 @@ You have used all *3 free signals*.
 🎯 TP2: `{signal['tp2']}`
 🛑 SL: `{signal['sl']}`
 
-📈 *Analysis:* 
-{signal['reason']}
+📈 *Analysis:* {reason[:200]}
 
-⭐ *Confidence: {signal['confidence']}%*
-
-⚠️ *Free signals left: {remaining-1}*
-⭐ *Get unlimited: /vip*
-"""
-            bot.reply_to(message, signal_text, parse_mode='Markdown', reply_markup=main_keyboard())
+⭐ *Free signals left: {remaining-1}*"""
+            bot.reply_to(message, text, parse_mode='Markdown')
             increment_user_signal_count(user_id)
             return
-    
-    bot.reply_to(message, "⚠️ No signal available right now. Market might be consolidating. Try again in a few minutes!", parse_mode='Markdown', reply_markup=main_keyboard())
+    bot.reply_to(message, "⚠️ No signal available. Try again in a few minutes.", parse_mode='Markdown')
 
 @bot.message_handler(commands=['vip'])
 def vip_command(message):
@@ -838,24 +697,18 @@ def vip_command(message):
 *Premium Benefits:*
 ✅ {VIP_SIGNAL_LIMIT_DAILY} Premium Signals Daily
 ✅ Multiple Timeframes (5m, 15m, 1h)
-✅ Early Entry Alerts (Before Market)
-✅ Live Market Analysis with Reasons
+✅ Early Entry Alerts
 ✅ 1-on-1 VIP Support
-✅ 85%+ Win Rate Guarantee
 
 💰 *Price:* ₹399/month
-
-*Payment Details:*
-📱 UPI ID: `{UPI_ID}`
+📱 UPI: `{UPI_ID}`
 
 *How to Join:*
 1️⃣ Pay ₹399 to above UPI ID
-2️⃣ Send payment screenshot to {CONTACT_USERNAME}
-3️⃣ Get VIP channel link
+2️⃣ Send screenshot to {CONTACT_USERNAME}
+3️⃣ Get VIP access
 
-🔗 *VIP Channel:* {VIP_CHANNEL}
-
-*After verification, you'll get instant access!*"""
+🔗 *VIP Channel:* {VIP_CHANNEL}"""
     bot.reply_to(message, msg, parse_mode='Markdown', reply_markup=main_keyboard())
 
 @bot.message_handler(commands=['support'])
@@ -865,10 +718,6 @@ def support_command(message):
 📱 *Telegram:* {CONTACT_USERNAME}
 📧 *Email:* btcuscoinbase@gmail.com
 🌐 *Website:* {WEBSITE_URL}
-
-*Response Time:*
-• VIP Members: Within 2 hours
-• Free Users: Within 24 hours
 
 We're here to help! 🚀"""
     bot.reply_to(message, msg, parse_mode='Markdown', reply_markup=main_keyboard())
@@ -880,10 +729,8 @@ def stats_command(message):
         total_users = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM registrations WHERE date LIKE ?", (f"{datetime.datetime.now().strftime('%Y-%m-%d')}%",))
         today_reg = c.fetchone()[0]
-        
         public_today = get_daily_public_count()
         vip_today = get_daily_vip_count()
-        
         c.execute("SELECT COUNT(*) FROM channel_signals WHERE result='pending'")
         active_trades = c.fetchone()[0]
         
@@ -897,35 +744,32 @@ def stats_command(message):
 • VIP: {vip_today}/{VIP_SIGNAL_LIMIT_DAILY}
 • Active Trades: {active_trades}
 
-🤖 Bot Status: Active ✅
-🕐 Last Update: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"""
+🤖 Bot Status: Active ✅"""
         bot.reply_to(message, msg, parse_mode='Markdown')
     else:
-        bot.reply_to(message, "❌ *Unauthorized*\n\nThis command is only for admin.")
+        bot.reply_to(message, "❌ Unauthorized - Admin only.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_buttons(call):
     if call.data == "register":
-        msg = bot.send_message(call.message.chat.id, "📝 *Send:* `Name, Email, Phone`\n\nExample: `Rajesh, rajesh@gmail.com, 9876543210`", parse_mode='Markdown')
+        msg = bot.send_message(call.message.chat.id, "📝 Send: `Name, Email, Phone`\nExample: `Rajesh, rajesh@gmail.com, 9876543210`", parse_mode='Markdown')
         bot.register_next_step_handler(msg, save_user)
     elif call.data == "free":
         remaining = signals_remaining(call.from_user.id)
         if remaining <= 0:
-            block_msg = f"🚫 Free limit reached! Join free channel: {FREE_CHANNEL}"
-            bot.send_message(call.message.chat.id, block_msg)
+            bot.send_message(call.message.chat.id, f"🚫 Free limit reached! Join: {FREE_CHANNEL}")
         else:
             for symbol in SYMBOLS:
                 result = get_signal_with_reason(symbol, "1h")
                 if result:
                     direction, confidence, price, reason, tf = result
                     signal = generate_signal_data(symbol, direction, price, confidence, reason, tf)
-                    signal_text = f"📊 FREE SIGNAL\n{signal['direction']} {signal['symbol']}\nEntry: {signal['entry_low']}-{signal['entry_high']}\nTP1: {signal['tp1']}\nTP2: {signal['tp2']}\nSL: {signal['sl']}\n\nReason: {reason[:100]}..."
-                    bot.send_message(call.message.chat.id, signal_text)
+                    text = f"📊 FREE SIGNAL\n{signal['direction']} {signal['symbol']}\nEntry: {signal['entry_low']}-{signal['entry_high']}\nTP1: {signal['tp1']}\nTP2: {signal['tp2']}\nSL: {signal['sl']}"
+                    bot.send_message(call.message.chat.id, text)
                     increment_user_signal_count(call.from_user.id)
                     break
     elif call.data == "vip":
-        msg = f"⭐ VIP Access: {VIP_CHANNEL}\n💰 ₹399/month\nUPI: {UPI_ID}"
-        bot.send_message(call.message.chat.id, msg)
+        bot.send_message(call.message.chat.id, f"⭐ VIP: {VIP_CHANNEL}\n💰 ₹399/month\nUPI: {UPI_ID}")
     elif call.data == "support":
         bot.send_message(call.message.chat.id, f"💬 Contact: {CONTACT_USERNAME}")
     bot.answer_callback_query(call.id)
@@ -941,13 +785,13 @@ print(f"👤 Admin ID: {ADMIN_ID}")
 print(f"📢 Public Channel: {CHANNEL_ID}")
 print(f"⭐ VIP Channel: {VIP_CHANNEL_ID}")
 print(f"📊 Daily Limits: Public={FREE_SIGNAL_LIMIT_DAILY}, VIP={VIP_SIGNAL_LIMIT_DAILY}")
+print(f"📞 Support: {CONTACT_USERNAME}")
 print("=" * 50)
 print("✅ Bot ready! Send /start on Telegram")
 print("🔄 Signal Scanner: Every 60 seconds")
 print("📊 Price Monitor: Every 60 seconds")
-print("🎯 TP Hype Messages: Enabled (with reasons)")
+print("🎯 TP Hype Messages: Enabled")
 print("🗑️ SL Deletion: Enabled")
-print("📈 Signal Reasons: Included in every trade")
 print("=" * 50)
 
 # Start background threads
